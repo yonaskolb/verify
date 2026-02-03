@@ -227,6 +227,40 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
     fs::write(path, content)
         .with_context(|| format!("Failed to write config file: {}", path.display()))?;
 
+    // Add .vfy/ to .gitignore if not already present
+    let gitignore_path = path.parent().unwrap_or(Path::new(".")).join(".gitignore");
+    let cache_pattern = "**/.vfy/";
+
+    let should_append = if gitignore_path.exists() {
+        let gitignore_content = fs::read_to_string(&gitignore_path)
+            .with_context(|| format!("Failed to read .gitignore: {}", gitignore_path.display()))?;
+        !gitignore_content.lines().any(|line| line.trim() == cache_pattern)
+    } else {
+        true
+    };
+
+    if should_append {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&gitignore_path)
+            .with_context(|| format!("Failed to open .gitignore: {}", gitignore_path.display()))?;
+
+        // Add newline before if file exists and doesn't end with newline
+        if gitignore_path.exists() {
+            let content = fs::read_to_string(&gitignore_path).unwrap_or_default();
+            if !content.is_empty() && !content.ends_with('\n') {
+                writeln!(file)?;
+            }
+        }
+
+        writeln!(file, "{}", cache_pattern)
+            .with_context(|| "Failed to write to .gitignore")?;
+    }
+
     Ok(())
 }
 
