@@ -208,6 +208,7 @@ mod tests {
                         cache_paths: vec![],
                         depends_on: deps.into_iter().map(String::from).collect(),
                         timeout_secs: None,
+                        metadata: std::collections::HashMap::new(),
                     })
                 })
                 .collect(),

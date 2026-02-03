@@ -15,3 +15,18 @@ verifications:
   # No cache_paths - always runs (relies on command's own caching)
   - name: always-run
     command: echo "This check always runs"
+
+  # Example with metadata extraction
+  - name: test-with-metrics
+    command: |
+      echo "Running tests..."
+      echo "Tests: 127 passed, 3 failed"
+      echo "Coverage: 85.5%"
+      echo "Files: 42"
+    cache_paths:
+      - "*.md"
+    metadata:
+      passed: "Tests: (\\d+) passed"
+      failed: "(\\d+) failed"
+      coverage: "Coverage: ([\\d.]+)%"
+      files: "Files: (\\d+)"

@@ -1,4 +1,5 @@
 use crate::hasher::FileHash;
+use crate::metadata::MetadataValue;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,10 @@ pub struct CheckCache {
     /// Individual file hashes for debugging/transparency
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_hashes: BTreeMap<String, FileHash>,
+
+    /// Extracted metadata values from last run
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, MetadataValue>,
 }
 
 /// Result of a verification check
@@ -170,6 +175,7 @@ impl CacheState {
         duration_ms: u64,
         content_hash: Option<String>,
         file_hashes: BTreeMap<String, FileHash>,
+        metadata: HashMap<String, MetadataValue>,
     ) {
         let cache = CheckCache {
             last_result: result,
@@ -188,6 +194,7 @@ impl CacheState {
             } else {
                 BTreeMap::new()
             },
+            metadata,
         };
         self.checks.insert(check_name.to_string(), cache);
     }
@@ -239,6 +246,7 @@ mod tests {
             1000,
             Some("abc123".to_string()),
             BTreeMap::new(),
+            HashMap::new(),
         );
 
         assert_eq!(
@@ -256,6 +264,7 @@ mod tests {
             1000,
             Some("abc123".to_string()),
             BTreeMap::new(),
+            HashMap::new(),
         );
 
         match cache.check_staleness("test", "different_hash") {
@@ -267,7 +276,7 @@ mod tests {
     #[test]
     fn test_staleness_after_failure() {
         let mut cache = CacheState::new();
-        cache.update("test", CheckResult::Fail, 1000, None, BTreeMap::new());
+        cache.update("test", CheckResult::Fail, 1000, None, BTreeMap::new(), HashMap::new());
 
         match cache.check_staleness("test", "anyhash") {
             StalenessStatus::Stale {

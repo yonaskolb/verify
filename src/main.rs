@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod graph;
 mod hasher;
+mod metadata;
 mod output;
 mod runner;
 mod ui;

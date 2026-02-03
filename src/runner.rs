@@ -2,10 +2,14 @@ use crate::cache::{CacheState, CheckResult, StalenessReason, StalenessStatus};
 use crate::config::{Config, Subproject, Verification, VerificationItem};
 use crate::graph::DependencyGraph;
 use crate::hasher::{compute_check_hash, find_changed_files, HashResult};
+use crate::metadata::{extract_metadata, MetadataValue};
 use crate::output::{
     CheckStatusJson, RunResults, StatusItemJson, StatusOutput, SubprojectStatusJson,
 };
-use crate::ui::{create_running_indicator, finish_cached, finish_fail, finish_pass, Ui};
+use crate::ui::{
+    create_running_indicator, finish_cached, finish_fail_with_metadata,
+    finish_pass_with_metadata, Ui,
+};
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -516,10 +520,15 @@ fn execute_verification(
             let pb = create_running_indicator(&check.name, indent);
             finish_cached(&pb, &check.name, indent);
         }
+        // For cached (skipped) checks, pass empty metadata since we didn't run the command
+        let empty_metadata = HashMap::new();
         results.add_pass(
             &check.name,
             cached.map(|c| c.duration_ms).unwrap_or(0),
             true,
+            &empty_metadata,
+            None,
+            None,
         );
         executed.insert(check.name.clone(), false);
         return Ok(());
@@ -531,6 +540,11 @@ fn execute_verification(
     } else {
         None
     };
+
+    // Get previous cache for duration and metadata deltas
+    let prev_cache = cache.get(&check.name);
+    let prev_duration = prev_cache.map(|c| c.duration_ms);
+    let prev_metadata = prev_cache.map(|c| c.metadata.clone());
 
     // Execute the check
     let start = Instant::now();
@@ -545,6 +559,13 @@ fn execute_verification(
         CheckResult::Fail
     };
 
+    // Extract metadata from output
+    let metadata = if !check.metadata.is_empty() {
+        extract_metadata(&output, &check.metadata)
+    } else {
+        HashMap::new()
+    };
+
     // Update cache
     cache.update(
         &check.name,
@@ -552,6 +573,7 @@ fn execute_verification(
         duration_ms,
         Some(hash_result.combined_hash.clone()),
         hash_result.file_hashes,
+        metadata.clone(),
     );
 
     // Record result
@@ -560,19 +582,35 @@ fn execute_verification(
     match result {
         CheckResult::Pass => {
             if let Some(pb) = pb {
-                finish_pass(&pb, &check.name, duration_ms, indent);
+                finish_pass_with_metadata(
+                    &pb,
+                    &check.name,
+                    duration_ms,
+                    prev_duration,
+                    &metadata,
+                    prev_metadata.as_ref(),
+                    indent,
+                );
             }
-            results.add_pass(&check.name, duration_ms, false);
+            results.add_pass(&check.name, duration_ms, false, &metadata, prev_metadata.as_ref(), prev_duration);
         }
         CheckResult::Fail => {
             if let Some(pb) = pb {
-                finish_fail(&pb, &check.name, duration_ms, indent);
+                finish_fail_with_metadata(
+                    &pb,
+                    &check.name,
+                    duration_ms,
+                    prev_duration,
+                    &metadata,
+                    prev_metadata.as_ref(),
+                    indent,
+                );
             }
             // Print error output separately (can't be part of progress bar)
             if !json {
                 ui.print_fail_output(Some(&output), indent);
             }
-            results.add_fail(&check.name, duration_ms, exit_code, Some(output));
+            results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref(), prev_duration);
         }
     }
 

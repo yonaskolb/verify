@@ -1,8 +1,18 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Pattern for extracting a metadata value from command output
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum MetadataPattern {
+    /// Pattern with replacement - [pattern, replacement]
+    WithReplacement(String, String),
+    /// Simple pattern - extracts first capture group
+    Simple(String),
+}
 
 /// Root configuration structure parsed from vfy.yaml
 #[derive(Debug, Deserialize, Serialize)]
@@ -60,6 +70,11 @@ pub struct Verification {
     /// Optional: timeout in seconds (defaults to no timeout)
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+
+    /// Metadata extraction patterns
+    /// Keys are metadata field names, values are regex patterns or [pattern, replacement] arrays
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, MetadataPattern>,
 }
 
 impl Config {

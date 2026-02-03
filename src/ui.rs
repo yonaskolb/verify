@@ -1,8 +1,10 @@
 use crate::cache::StalenessReason;
+use crate::metadata::{compute_delta, MetadataValue};
 use crate::output::{format_duration, format_relative_time};
 use chrono::{DateTime, Utc};
 use console::{style, Term};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Circle icon used for all states (colored differently)
@@ -376,6 +378,129 @@ pub fn finish_fail(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize
         style(name).bold(),
         style(format!("({})", format_duration(duration_ms))).dim()
     ));
+}
+
+/// Format duration with optional delta from previous run
+fn format_duration_with_delta(current: u64, prev: Option<u64>) -> String {
+    let current_str = format_duration(current);
+    match prev {
+        None => format!("({})", current_str),
+        Some(p) => {
+            let delta = current as i64 - p as i64;
+            if delta == 0 {
+                format!("({})", current_str)
+            } else if delta > 0 {
+                format!("({}, +{})", current_str, format_duration(delta as u64))
+            } else {
+                format!("({}, -{})", current_str, format_duration((-delta) as u64))
+            }
+        }
+    }
+}
+
+/// Format a numeric delta for display
+fn format_delta(d: f64) -> String {
+    if d == d.trunc() {
+        format!("{:.0}", d) // integer-like
+    } else {
+        format!("{:.1}", d) // float
+    }
+}
+
+/// Print metadata with deltas, indented
+fn print_metadata(
+    metadata: &HashMap<String, MetadataValue>,
+    prev: Option<&HashMap<String, MetadataValue>>,
+    indent: usize,
+) {
+    let prefix = "    ".repeat(indent);
+    for (key, value) in metadata {
+        let delta = prev.and_then(|p| p.get(key).and_then(|pv| compute_delta(value, pv)));
+
+        match delta {
+            Some(d) if d > 0.0 => {
+                println!(
+                    "{}  {}: {} {}",
+                    prefix,
+                    style(key).dim(),
+                    value,
+                    style(format!("(+{})", format_delta(d))).green()
+                )
+            }
+            Some(d) if d < 0.0 => {
+                println!(
+                    "{}  {}: {} {}",
+                    prefix,
+                    style(key).dim(),
+                    value,
+                    style(format!("({})", format_delta(d))).red()
+                )
+            }
+            _ => println!("{}  {}: {}", prefix, style(key).dim(), value),
+        }
+    }
+}
+
+/// Finish a running indicator with pass state + metadata display
+pub fn finish_pass_with_metadata(
+    pb: &ProgressBar,
+    name: &str,
+    duration_ms: u64,
+    prev_duration: Option<u64>,
+    metadata: &HashMap<String, MetadataValue>,
+    prev_metadata: Option<&HashMap<String, MetadataValue>>,
+    indent: usize,
+) {
+    let prefix = "    ".repeat(indent);
+    let duration_str = format_duration_with_delta(duration_ms, prev_duration);
+
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{}{{msg}}", prefix))
+            .unwrap(),
+    );
+    pb.finish_with_message(format!(
+        "{} {} {}",
+        style(ICON_CIRCLE).green().bold(),
+        style(name).bold(),
+        style(duration_str).dim()
+    ));
+
+    // Print metadata below (if any)
+    if !metadata.is_empty() {
+        print_metadata(metadata, prev_metadata, indent);
+    }
+}
+
+/// Finish a running indicator with fail state + metadata display
+pub fn finish_fail_with_metadata(
+    pb: &ProgressBar,
+    name: &str,
+    duration_ms: u64,
+    prev_duration: Option<u64>,
+    metadata: &HashMap<String, MetadataValue>,
+    prev_metadata: Option<&HashMap<String, MetadataValue>>,
+    indent: usize,
+) {
+    let prefix = "    ".repeat(indent);
+    let duration_str = format_duration_with_delta(duration_ms, prev_duration);
+
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{}{{msg}}", prefix))
+            .unwrap(),
+    );
+    pb.finish_with_message(format!(
+        "{} {} {}",
+        style(ICON_CIRCLE).red().bold(),
+        style(name).bold(),
+        style(duration_str).dim()
+    ));
+
+    // Print metadata below (if any)
+    if !metadata.is_empty() {
+        print_metadata(metadata, prev_metadata, indent);
+    }
 }
 
 /// Multi-progress for parallel execution
