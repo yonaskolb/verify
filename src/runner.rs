@@ -377,16 +377,22 @@ fn execute_item_with_deps(
         return Ok(());
     }
 
+    // Skip if not in requested names (when names is non-empty)
+    if !names.is_empty() && !names.contains(&item_name) {
+        return Ok(());
+    }
+
     // For verifications, first execute any dependencies
     if let VerificationItem::Verification(v) = item {
         for dep_name in &v.depends_on {
             // Check if dependency is a subproject
             if let Some(sub) = config.get_subproject(dep_name) {
-                // Execute subproject if not already done
+                // Execute subproject if not already done (run all checks in the subproject)
                 if !executed.contains_key(dep_name) {
                     let sub_results = run_checks_subproject(
                         project_root,
                         sub,
+                        &[],
                         run_all,
                         force,
                         json,
@@ -442,10 +448,15 @@ fn execute_item_with_deps(
             )?;
         }
         VerificationItem::Subproject(s) => {
+            // Skip if not in requested names (when names is non-empty)
+            if !names.is_empty() && !names.contains(&s.name) {
+                return Ok(());
+            }
             if !executed.contains_key(&s.name) {
                 let sub_results = run_checks_subproject(
                     project_root,
                     s,
+                    names,
                     run_all,
                     force,
                     json,
@@ -621,6 +632,7 @@ fn execute_verification(
 fn run_checks_subproject(
     parent_root: &Path,
     subproject: &Subproject,
+    names: &[String],
     run_all: bool,
     force: bool,
     json: bool,
@@ -638,12 +650,12 @@ fn run_checks_subproject(
         ui.print_subproject_header(&subproject.name, indent, false);
     }
 
-    // Recursively run checks (run all checks in subprojects, empty names = all)
+    // Recursively run checks with the same name filter
     let sub_results = run_checks_recursive(
         &subproject_dir,
         &sub_config,
         &mut sub_cache,
-        &[],
+        names,
         run_all,
         force,
         json,
