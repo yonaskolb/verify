@@ -226,14 +226,14 @@ impl Ui {
             println!(
                 "{}{} {}",
                 prefix,
-                style(ICON_CIRCLE).blue().bold(),
+                style(ICON_CIRCLE).yellow().bold(),
                 style(&names[0]).bold()
             );
         } else {
             println!(
                 "{}{} {} {}",
                 prefix,
-                style(ICON_CIRCLE).blue().bold(),
+                style(ICON_CIRCLE).yellow().bold(),
                 names.join(", "),
                 style("(parallel)").dim()
             );
@@ -323,7 +323,7 @@ pub fn create_running_indicator(name: &str, indent: usize) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
-            .template(&format!("{}{{spinner:.blue.bold}} {{msg}}", prefix))
+            .template(&format!("{}{{spinner:.yellow.bold}} {{msg}}", prefix))
             .unwrap()
             .tick_chars(&format!("{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", ICON_CIRCLE)),
     );
