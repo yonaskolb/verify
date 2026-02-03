@@ -5,7 +5,7 @@ use crate::hasher::{compute_check_hash, find_changed_files, HashResult};
 use crate::output::{
     CheckStatusJson, RunResults, StatusItemJson, StatusOutput, SubprojectStatusJson,
 };
-use crate::ui::Ui;
+use crate::ui::{create_running_indicator, finish_cached, finish_fail, finish_pass, Ui};
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -503,11 +503,12 @@ fn execute_verification(
     let should_run = force || run_all || !matches!(staleness, StalenessStatus::Fresh);
 
     if !should_run {
-        // Skip - cache fresh, but still show it green
-        if !json {
-            ui.print_cached_indented(&check.name, indent);
-        }
+        // Skip - cache fresh, show with in-place green indicator
         let cached = cache.get(&check.name);
+        if !json {
+            let pb = create_running_indicator(&check.name, indent);
+            finish_cached(&pb, &check.name, indent);
+        }
         results.add_pass(
             &check.name,
             cached.map(|c| c.duration_ms).unwrap_or(0),
@@ -517,10 +518,12 @@ fn execute_verification(
         return Ok(());
     }
 
-    // Print running indicator
-    if !json {
-        ui.print_wave_start_indented(&[check.name.clone()], indent);
-    }
+    // Create running indicator (blue circle that updates in place)
+    let pb = if !json {
+        Some(create_running_indicator(&check.name, indent))
+    } else {
+        None
+    };
 
     // Execute the check
     let start = Instant::now();
@@ -549,14 +552,18 @@ fn execute_verification(
 
     match result {
         CheckResult::Pass => {
-            if !json {
-                ui.print_pass_indented(&check.name, duration_ms, indent);
+            if let Some(pb) = pb {
+                finish_pass(&pb, &check.name, duration_ms, indent);
             }
             results.add_pass(&check.name, duration_ms, false);
         }
         CheckResult::Fail => {
+            if let Some(pb) = pb {
+                finish_fail(&pb, &check.name, duration_ms, indent);
+            }
+            // Print error output separately (can't be part of progress bar)
             if !json {
-                ui.print_fail_indented(&check.name, duration_ms, Some(&output), indent);
+                ui.print_fail_output(Some(&output), indent);
             }
             results.add_fail(&check.name, duration_ms, exit_code, Some(output));
         }
