@@ -83,6 +83,7 @@ impl Ui {
                 format!("depends on: {}", dependency)
             }
             StalenessReason::LastRunFailed => "last run failed".to_string(),
+            StalenessReason::NoCachePaths => "no cache paths".to_string(),
         };
 
         println!(

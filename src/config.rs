@@ -49,6 +49,8 @@ pub struct Verification {
     pub command: String,
 
     /// Glob patterns for files that affect this check's cache validity
+    /// If empty or not specified, the check always runs (no vfy-level caching)
+    #[serde(default)]
     pub cache_paths: Vec<String>,
 
     /// Names of checks that must run before this one

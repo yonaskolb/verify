@@ -11,3 +11,7 @@ verifications:
     depends_on: [frontend, backend]
     cache_paths:
       - "*.md"
+
+  # No cache_paths - always runs (relies on command's own caching)
+  - name: always-run
+    command: echo "This check always runs"

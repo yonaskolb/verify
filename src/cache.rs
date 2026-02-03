@@ -73,6 +73,8 @@ pub enum StalenessReason {
     DependencyStale { dependency: String },
     /// Last run failed
     LastRunFailed,
+    /// No cache_paths defined - always run
+    NoCachePaths,
 }
 
 impl CacheState {

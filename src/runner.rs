@@ -67,6 +67,13 @@ fn compute_staleness(
         }
     }
 
+    // If no cache_paths defined, always run (rely on command's own caching)
+    if check.cache_paths.is_empty() {
+        return StalenessStatus::Stale {
+            reason: StalenessReason::NoCachePaths,
+        };
+    }
+
     // Then check file changes
     let status = cache.check_staleness(&check.name, &hash_result.combined_hash);
 

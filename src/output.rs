@@ -75,6 +75,7 @@ impl CheckStatusJson {
                 (Some("dependency_stale".to_string()), Some(dependency.clone()), None)
             }
             StalenessReason::LastRunFailed => (Some("last_run_failed".to_string()), None, None),
+            StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
         };
 
         Self {
