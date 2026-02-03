@@ -1,0 +1,11 @@
+# Backend subproject
+verifications:
+  - name: build
+    command: echo "Building backend"
+    cache_paths:
+      - "*.py"
+
+  - name: lint
+    command: echo "Linting backend"
+    cache_paths:
+      - "*.py"

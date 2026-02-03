@@ -1,0 +1,13 @@
+# Root config with subprojects and cross-dependencies
+verifications:
+  - name: frontend
+    path: ./packages/frontend
+
+  - name: backend
+    path: ./packages/backend
+
+  - name: integration-test
+    command: echo "Running integration tests after subprojects"
+    depends_on: [frontend, backend]
+    cache_paths:
+      - "*.md"

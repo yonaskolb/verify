@@ -1,0 +1,12 @@
+# Frontend subproject
+verifications:
+  - name: build
+    command: echo "Building frontend"
+    cache_paths:
+      - "*.js"
+
+  - name: test
+    command: echo "Testing frontend"
+    depends_on: [build]
+    cache_paths:
+      - "*.js"
