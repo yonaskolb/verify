@@ -5,13 +5,8 @@ use console::{style, Term};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::time::Duration;
 
-/// Icons for different states
-pub const ICON_PASS: &str = "\u{2713}"; // ✓
-pub const ICON_FAIL: &str = "\u{2717}"; // ✗
-pub const ICON_STALE: &str = "\u{25CB}"; // ○
-pub const ICON_NEVER: &str = "?";
-pub const ICON_RUNNING: &str = "\u{25CF}"; // ●
-pub const ICON_SKIPPED: &str = "\u{25CB}"; // ○
+/// Circle icon used for all states (colored differently)
+pub const ICON_CIRCLE: &str = "\u{25CF}"; // ●
 
 /// Terminal UI helper
 pub struct Ui {
@@ -35,11 +30,10 @@ impl Ui {
     /// Print a subproject header
     pub fn print_subproject_header(&self, name: &str, indent: usize, has_stale: bool) {
         let prefix = Self::indent_str(indent);
-        let icon = if has_stale { ICON_STALE } else { ICON_PASS };
         let icon_style = if has_stale {
-            style(icon).yellow().bold()
+            style(ICON_CIRCLE).yellow().bold()
         } else {
-            style(icon).green().bold()
+            style(ICON_CIRCLE).green().bold()
         };
         println!("{}{} {}", prefix, icon_style, style(name).bold());
     }
@@ -61,7 +55,7 @@ impl Ui {
         println!(
             "{}{} {} - {} (ran {}, {})",
             prefix,
-            style(ICON_PASS).green().bold(),
+            style(ICON_CIRCLE).green().bold(),
             style(name).bold(),
             style("fresh").green(),
             format_relative_time(last_run),
@@ -94,7 +88,7 @@ impl Ui {
         println!(
             "{}{} {} - {} ({})",
             prefix,
-            style(ICON_STALE).yellow().bold(),
+            style(ICON_CIRCLE).yellow().bold(),
             style(name).bold(),
             style("stale").yellow(),
             reason_str
@@ -112,7 +106,7 @@ impl Ui {
         println!(
             "{}{} {} - {}",
             prefix,
-            style(ICON_NEVER).dim(),
+            style(ICON_CIRCLE).dim(),
             style(name).bold(),
             style("never run").dim()
         );
@@ -129,7 +123,7 @@ impl Ui {
         println!(
             "{}{} {} {}",
             prefix,
-            style(ICON_SKIPPED).dim(),
+            style(ICON_CIRCLE).dim(),
             style(name).dim(),
             style("(cache fresh)").dim()
         );
@@ -146,7 +140,7 @@ impl Ui {
         println!(
             "{}{} {} {}",
             prefix,
-            style(ICON_PASS).green().bold(),
+            style(ICON_CIRCLE).green().bold(),
             style(name).bold(),
             style(format!("({})", format_duration(duration_ms))).dim()
         );
@@ -163,7 +157,7 @@ impl Ui {
         println!(
             "{}{} {} {}",
             prefix,
-            style(ICON_PASS).green().bold(),
+            style(ICON_CIRCLE).green().bold(),
             style(name).bold(),
             style("(cached)").dim()
         );
@@ -186,11 +180,17 @@ impl Ui {
         println!(
             "{}{} {} {}",
             prefix,
-            style(ICON_FAIL).red().bold(),
+            style(ICON_CIRCLE).red().bold(),
             style(name).bold(),
             style(format!("({})", format_duration(duration_ms))).dim()
         );
 
+        self.print_fail_output(output, indent);
+    }
+
+    /// Print the output from a failed check (separate from the status line)
+    pub fn print_fail_output(&self, output: Option<&str>, indent: usize) {
+        let prefix = Self::indent_str(indent);
         if let Some(output) = output {
             // Print indented output, limited lines
             let lines: Vec<&str> = output.lines().collect();
@@ -223,14 +223,14 @@ impl Ui {
             println!(
                 "{}{} {}",
                 prefix,
-                style(ICON_RUNNING).blue().bold(),
+                style(ICON_CIRCLE).blue().bold(),
                 style(&names[0]).bold()
             );
         } else {
             println!(
                 "{}{} {} {}",
                 prefix,
-                style(ICON_RUNNING).blue().bold(),
+                style(ICON_CIRCLE).blue().bold(),
                 names.join(", "),
                 style("(parallel)").dim()
             );
@@ -293,7 +293,7 @@ impl Ui {
     pub fn print_init_success(&self, path: &str) {
         println!(
             "{} Created {}",
-            style(ICON_PASS).green().bold(),
+            style(ICON_CIRCLE).green().bold(),
             style(path).bold()
         );
         println!("  Run {} to see check status", style("vfy status").cyan());
@@ -303,28 +303,78 @@ impl Ui {
     /// Print cache cleaned message
     pub fn print_cache_cleaned(&self, names: &[String]) {
         if names.is_empty() {
-            println!("{} Cleared all cached results", style(ICON_PASS).green().bold());
+            println!("{} Cleared all cached results", style(ICON_CIRCLE).green().bold());
         } else {
             println!(
                 "{} Cleared cache for: {}",
-                style(ICON_PASS).green().bold(),
+                style(ICON_CIRCLE).green().bold(),
                 names.join(", ")
             );
         }
     }
 }
 
-/// Create a spinner for a running check
-pub fn create_spinner(name: &str) -> ProgressBar {
+/// Create a running indicator that shows a blue circle and can be updated in-place
+pub fn create_running_indicator(name: &str, indent: usize) -> ProgressBar {
+    let prefix = "    ".repeat(indent);
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
-            .template("{spinner:.blue} {msg}")
-            .unwrap(),
+            .template(&format!("{}{{spinner:.blue.bold}} {{msg}}", prefix))
+            .unwrap()
+            .tick_chars(&format!("{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}", ICON_CIRCLE)),
     );
-    pb.set_message(format!("Running {}...", name));
+    pb.set_message(name.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
+}
+
+/// Finish a running indicator with pass state (green circle)
+pub fn finish_pass(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize) {
+    let prefix = "    ".repeat(indent);
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{}{{msg}}", prefix))
+            .unwrap(),
+    );
+    pb.finish_with_message(format!(
+        "{} {} {}",
+        style(ICON_CIRCLE).green().bold(),
+        style(name).bold(),
+        style(format!("({})", format_duration(duration_ms))).dim()
+    ));
+}
+
+/// Finish a running indicator with cached state (green circle)
+pub fn finish_cached(pb: &ProgressBar, name: &str, indent: usize) {
+    let prefix = "    ".repeat(indent);
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{}{{msg}}", prefix))
+            .unwrap(),
+    );
+    pb.finish_with_message(format!(
+        "{} {} {}",
+        style(ICON_CIRCLE).green().bold(),
+        style(name).bold(),
+        style("(cached)").dim()
+    ));
+}
+
+/// Finish a running indicator with fail state (red circle)
+pub fn finish_fail(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize) {
+    let prefix = "    ".repeat(indent);
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{}{{msg}}", prefix))
+            .unwrap(),
+    );
+    pb.finish_with_message(format!(
+        "{} {} {}",
+        style(ICON_CIRCLE).red().bold(),
+        style(name).bold(),
+        style(format!("({})", format_duration(duration_ms))).dim()
+    ));
 }
 
 /// Multi-progress for parallel execution

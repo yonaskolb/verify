@@ -28,14 +28,15 @@ impl DependencyGraph {
         }
 
         // Add edges (dependency -> dependent)
+        // Skip dependencies that are subprojects (not in this graph)
         for v in verifications {
             let dependent_node = name_to_node[&v.name];
             for dep_name in &v.depends_on {
-                let dep_node = name_to_node
-                    .get(dep_name)
-                    .with_context(|| format!("Unknown dependency: {}", dep_name))?;
-                // Edge from dependency to dependent
-                graph.add_edge(*dep_node, dependent_node, ());
+                // Only add edge if dependency is a verification (in the graph)
+                // Subproject dependencies are handled separately in the runner
+                if let Some(&dep_node) = name_to_node.get(dep_name) {
+                    graph.add_edge(dep_node, dependent_node, ());
+                }
             }
         }
 
