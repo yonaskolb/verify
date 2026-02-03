@@ -288,14 +288,13 @@ pub fn run_checks(
     config: &Config,
     cache: &mut CacheState,
     names: Vec<String>,
-    run_all: bool,
     force: bool,
     json: bool,
     verbose: bool,
 ) -> Result<i32> {
     let ui = Ui::new(verbose);
     let final_results =
-        run_checks_recursive(project_root, config, cache, &names, run_all, force, json, &ui, 0)?;
+        run_checks_recursive(project_root, config, cache, &names, force, json, &ui, 0)?;
 
     // Save cache for root project
     cache.save(project_root)?;
@@ -323,7 +322,6 @@ fn run_checks_recursive(
     config: &Config,
     cache: &mut CacheState,
     names: &[String],
-    run_all: bool,
     force: bool,
     json: bool,
     ui: &Ui,
@@ -342,7 +340,6 @@ fn run_checks_recursive(
             cache,
             item,
             names,
-            run_all,
             force,
             json,
             ui,
@@ -362,7 +359,6 @@ fn execute_item_with_deps(
     cache: &mut CacheState,
     item: &VerificationItem,
     names: &[String],
-    run_all: bool,
     force: bool,
     json: bool,
     ui: &Ui,
@@ -393,7 +389,6 @@ fn execute_item_with_deps(
                         project_root,
                         sub,
                         &[],
-                        run_all,
                         force,
                         json,
                         ui,
@@ -414,7 +409,6 @@ fn execute_item_with_deps(
                         project_root,
                         dep_v,
                         cache,
-                        run_all,
                         force,
                         json,
                         ui,
@@ -438,7 +432,6 @@ fn execute_item_with_deps(
                 project_root,
                 v,
                 cache,
-                run_all,
                 force,
                 json,
                 ui,
@@ -457,7 +450,6 @@ fn execute_item_with_deps(
                     project_root,
                     s,
                     names,
-                    run_all,
                     force,
                     json,
                     ui,
@@ -482,7 +474,6 @@ fn execute_verification(
     project_root: &Path,
     check: &Verification,
     cache: &mut CacheState,
-    run_all: bool,
     force: bool,
     json: bool,
     ui: &Ui,
@@ -522,7 +513,7 @@ fn execute_verification(
         compute_staleness(check, &hash_result, cache, &dep_staleness)
     };
 
-    let should_run = force || run_all || !matches!(staleness, StalenessStatus::Fresh);
+    let should_run = force || !matches!(staleness, StalenessStatus::Fresh);
 
     if !should_run {
         // Skip - cache fresh, show with in-place green indicator
@@ -633,7 +624,6 @@ fn run_checks_subproject(
     parent_root: &Path,
     subproject: &Subproject,
     names: &[String],
-    run_all: bool,
     force: bool,
     json: bool,
     ui: &Ui,
@@ -656,7 +646,6 @@ fn run_checks_subproject(
         &sub_config,
         &mut sub_cache,
         names,
-        run_all,
         force,
         json,
         ui,

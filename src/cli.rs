@@ -29,10 +29,6 @@ pub enum Commands {
         #[arg(value_name = "NAME")]
         names: Vec<String>,
 
-        /// Run all checks regardless of cache status
-        #[arg(long)]
-        all: bool,
-
         /// Force run even if cache is fresh
         #[arg(short, long)]
         force: bool,
@@ -64,7 +60,6 @@ impl Default for Commands {
     fn default() -> Self {
         Commands::Run {
             names: vec![],
-            all: false,
             force: false,
         }
     }

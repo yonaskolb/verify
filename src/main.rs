@@ -58,7 +58,7 @@ fn run() -> Result<i32> {
             Ok(0)
         }
 
-        Commands::Run { names, all, force } => {
+        Commands::Run { names, force } => {
             let config = config::Config::load(config_path)?;
             let mut cache = cache::CacheState::load(&project_root)?;
 
@@ -74,7 +74,6 @@ fn run() -> Result<i32> {
                 &config,
                 &mut cache,
                 names,
-                all,
                 force,
                 cli.json,
                 cli.verbose,
