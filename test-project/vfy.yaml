@@ -30,3 +30,7 @@ verifications:
       failed: "(\\d+) failed"
       coverage: "Coverage: ([\\d.]+)%"
       files: "Files: (\\d+)"
+
+  # Always fails - for testing failure output
+  - name: always-fails
+    command: echo "This test always fails" && exit 1

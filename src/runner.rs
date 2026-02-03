@@ -601,6 +601,7 @@ fn execute_verification(
                 finish_fail_with_metadata(
                     &pb,
                     &check.name,
+                    &check.command,
                     duration_ms,
                     prev_duration,
                     &metadata,

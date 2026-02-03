@@ -365,19 +365,18 @@ pub fn finish_cached(pb: &ProgressBar, name: &str, indent: usize) {
 }
 
 /// Finish a running indicator with fail state (red circle)
-pub fn finish_fail(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize) {
+pub fn finish_fail(pb: &ProgressBar, name: &str, command: &str, duration_ms: u64, indent: usize) {
     let prefix = "    ".repeat(indent);
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{}{{msg}}", prefix))
-            .unwrap(),
-    );
-    pb.finish_with_message(format!(
-        "{} {} {}",
+    pb.finish_and_clear();
+    println!(
+        "{}{} {} {}",
+        prefix,
         style(ICON_CIRCLE).red().bold(),
         style(name).bold(),
         style(format!("({})", format_duration(duration_ms))).dim()
-    ));
+    );
+    // Print the command in red
+    println!("{}  {}", prefix, style(command).red());
 }
 
 /// Format duration with optional delta from previous run
@@ -476,6 +475,7 @@ pub fn finish_pass_with_metadata(
 pub fn finish_fail_with_metadata(
     pb: &ProgressBar,
     name: &str,
+    command: &str,
     duration_ms: u64,
     prev_duration: Option<u64>,
     metadata: &HashMap<String, MetadataValue>,
@@ -485,17 +485,17 @@ pub fn finish_fail_with_metadata(
     let prefix = "    ".repeat(indent);
     let duration_str = format_duration_with_delta(duration_ms, prev_duration);
 
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{}{{msg}}", prefix))
-            .unwrap(),
-    );
-    pb.finish_with_message(format!(
-        "{} {} {}",
+    pb.finish_and_clear();
+    println!(
+        "{}{} {} {}",
+        prefix,
         style(ICON_CIRCLE).red().bold(),
         style(name).bold(),
         style(duration_str).dim()
-    ));
+    );
+
+    // Print the command in red
+    println!("{}  {}", prefix, style(command).red());
 
     // Print metadata below (if any)
     if !metadata.is_empty() {
