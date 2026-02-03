@@ -1,0 +1,39 @@
+[package]
+name = "vfy"
+version = "0.1.0"
+edition = "2024"
+description = "A CLI tool for managing project verification checks with intelligent caching"
+license = "MIT"
+repository = "https://github.com/yonas/vfy"
+
+[dependencies]
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive", "color"] }
+
+# Serialization/deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yml = "0.0.12"
+serde_json = "1.0"
+
+# File system operations
+glob = "0.3"
+
+# Hashing - BLAKE3 for performance
+blake3 = "1.5"
+
+# Terminal UI
+indicatif = "0.17"
+console = "0.15"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Parallel execution
+rayon = "1.10"
+
+# Dependency graph
+petgraph = "0.7"
