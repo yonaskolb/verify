@@ -11,19 +11,24 @@ pub struct DependencyGraph {
 }
 
 impl DependencyGraph {
-    /// Build a dependency graph from configuration
+    /// Build a dependency graph from configuration (verifications only, not subprojects)
     pub fn from_config(config: &Config) -> Result<Self> {
+        Self::from_verifications(&config.verifications_only())
+    }
+
+    /// Build a dependency graph from a list of verifications
+    pub fn from_verifications(verifications: &[&Verification]) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut name_to_node = HashMap::new();
 
         // Add all nodes
-        for v in &config.verifications {
+        for v in verifications {
             let node = graph.add_node(v.name.clone());
             name_to_node.insert(v.name.clone(), node);
         }
 
         // Add edges (dependency -> dependent)
-        for v in &config.verifications {
+        for v in verifications {
             let dependent_node = name_to_node[&v.name];
             for dep_name in &v.depends_on {
                 let dep_node = name_to_node
@@ -163,9 +168,11 @@ impl DependencyGraph {
         config: &'a Config,
         requested: &[String],
     ) -> Vec<&'a Verification> {
+        let verifications = config.verifications_only();
+
         if requested.is_empty() {
             // Run all checks
-            return config.verifications.iter().collect();
+            return verifications;
         }
 
         // Collect all checks including dependencies
@@ -177,9 +184,8 @@ impl DependencyGraph {
         }
 
         // Return in config order (respects topological ordering within waves)
-        config
-            .verifications
-            .iter()
+        verifications
+            .into_iter()
             .filter(|v| to_run.contains(&v.name))
             .collect()
     }
@@ -188,18 +194,20 @@ impl DependencyGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Verification;
+    use crate::config::{Verification, VerificationItem};
 
     fn make_config(verifications: Vec<(&str, Vec<&str>)>) -> Config {
         Config {
             verifications: verifications
                 .into_iter()
-                .map(|(name, deps)| Verification {
-                    name: name.to_string(),
-                    command: "echo test".to_string(),
-                    cache_paths: vec![],
-                    depends_on: deps.into_iter().map(String::from).collect(),
-                    timeout_secs: None,
+                .map(|(name, deps)| {
+                    VerificationItem::Verification(Verification {
+                        name: name.to_string(),
+                        command: "echo test".to_string(),
+                        cache_paths: vec![],
+                        depends_on: deps.into_iter().map(String::from).collect(),
+                        timeout_secs: None,
+                    })
                 })
                 .collect(),
         }

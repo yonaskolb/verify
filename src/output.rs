@@ -5,7 +5,36 @@ use serde::Serialize;
 /// JSON output for `vfy status`
 #[derive(Debug, Serialize)]
 pub struct StatusOutput {
-    pub checks: Vec<CheckStatusJson>,
+    pub checks: Vec<StatusItemJson>,
+}
+
+/// Either a check status or a subproject with nested checks
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum StatusItemJson {
+    Check(CheckStatusJson),
+    Subproject(SubprojectStatusJson),
+}
+
+/// JSON output for a subproject in status
+#[derive(Debug, Serialize)]
+pub struct SubprojectStatusJson {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub path: String,
+    pub checks: Vec<StatusItemJson>,
+}
+
+impl SubprojectStatusJson {
+    pub fn new(name: &str, path: &str, checks: Vec<StatusItemJson>) -> Self {
+        Self {
+            name: name.to_string(),
+            item_type: "subproject".to_string(),
+            path: path.to_string(),
+            checks,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -75,11 +104,42 @@ impl CheckStatusJson {
 /// JSON output for `vfy run`
 #[derive(Debug, Serialize)]
 pub struct RunOutput {
-    pub results: Vec<CheckRunJson>,
+    pub results: Vec<RunItemJson>,
     pub summary: RunSummary,
 }
 
-#[derive(Debug, Serialize)]
+/// Either a check result or a subproject with nested results
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum RunItemJson {
+    Check(CheckRunJson),
+    Subproject(SubprojectRunJson),
+}
+
+/// JSON output for a subproject in run results
+#[derive(Debug, Clone, Serialize)]
+pub struct SubprojectRunJson {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub path: String,
+    pub results: Vec<RunItemJson>,
+    pub summary: RunSummary,
+}
+
+impl SubprojectRunJson {
+    pub fn new(name: &str, path: &str, results: Vec<RunItemJson>, summary: RunSummary) -> Self {
+        Self {
+            name: name.to_string(),
+            item_type: "subproject".to_string(),
+            path: path.to_string(),
+            results,
+            summary,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckRunJson {
     pub name: String,
     pub result: String,
@@ -126,7 +186,7 @@ impl CheckRunJson {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunSummary {
     pub total: usize,
     pub passed: usize,
@@ -135,9 +195,9 @@ pub struct RunSummary {
 }
 
 /// Collected results during a run
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RunResults {
-    pub results: Vec<CheckRunJson>,
+    pub results: Vec<RunItemJson>,
     pub passed: usize,
     pub failed: usize,
     pub skipped: usize,
@@ -146,17 +206,46 @@ pub struct RunResults {
 impl RunResults {
     pub fn add_pass(&mut self, name: &str, duration_ms: u64, cached: bool) {
         if cached {
-            self.results.push(CheckRunJson::skipped(name, Some(duration_ms)));
+            self.results
+                .push(RunItemJson::Check(CheckRunJson::skipped(name, Some(duration_ms))));
             self.skipped += 1;
         } else {
-            self.results.push(CheckRunJson::pass(name, duration_ms, cached));
+            self.results
+                .push(RunItemJson::Check(CheckRunJson::pass(name, duration_ms, cached)));
             self.passed += 1;
         }
     }
 
-    pub fn add_fail(&mut self, name: &str, duration_ms: u64, exit_code: Option<i32>, output: Option<String>) {
-        self.results.push(CheckRunJson::fail(name, duration_ms, exit_code, output));
+    pub fn add_fail(
+        &mut self,
+        name: &str,
+        duration_ms: u64,
+        exit_code: Option<i32>,
+        output: Option<String>,
+    ) {
+        self.results
+            .push(RunItemJson::Check(CheckRunJson::fail(name, duration_ms, exit_code, output)));
         self.failed += 1;
+    }
+
+    pub fn add_subproject(&mut self, name: &str, path: &str, sub_results: RunResults) {
+        self.passed += sub_results.passed;
+        self.failed += sub_results.failed;
+        self.skipped += sub_results.skipped;
+
+        let summary = RunSummary {
+            total: sub_results.passed + sub_results.failed + sub_results.skipped,
+            passed: sub_results.passed,
+            failed: sub_results.failed,
+            skipped: sub_results.skipped,
+        };
+
+        self.results.push(RunItemJson::Subproject(SubprojectRunJson::new(
+            name,
+            path,
+            sub_results.results,
+            summary,
+        )));
     }
 
     pub fn to_output(self) -> RunOutput {
@@ -169,6 +258,15 @@ impl RunResults {
                 failed: self.failed,
                 skipped: self.skipped,
             },
+        }
+    }
+
+    pub fn to_summary(&self) -> RunSummary {
+        RunSummary {
+            total: self.passed + self.failed + self.skipped,
+            passed: self.passed,
+            failed: self.failed,
+            skipped: self.skipped,
         }
     }
 }

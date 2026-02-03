@@ -27,10 +27,40 @@ impl Ui {
         }
     }
 
+    /// Generate indentation string (4 spaces per level)
+    fn indent_str(indent: usize) -> String {
+        "    ".repeat(indent)
+    }
+
+    /// Print a subproject header
+    pub fn print_subproject_header(&self, name: &str, indent: usize, has_stale: bool) {
+        let prefix = Self::indent_str(indent);
+        let icon = if has_stale { ICON_STALE } else { ICON_PASS };
+        let icon_style = if has_stale {
+            style(icon).yellow().bold()
+        } else {
+            style(icon).green().bold()
+        };
+        println!("{}{} {}", prefix, icon_style, style(name).bold());
+    }
+
     /// Print status for a fresh check
     pub fn print_status_fresh(&self, name: &str, last_run: &DateTime<Utc>, duration_ms: u64) {
+        self.print_status_fresh_indented(name, last_run, duration_ms, 0);
+    }
+
+    /// Print status for a fresh check with indentation
+    pub fn print_status_fresh_indented(
+        &self,
+        name: &str,
+        last_run: &DateTime<Utc>,
+        duration_ms: u64,
+        indent: usize,
+    ) {
+        let prefix = Self::indent_str(indent);
         println!(
-            "{} {} - {} (ran {}, {})",
+            "{}{} {} - {} (ran {}, {})",
+            prefix,
             style(ICON_PASS).green().bold(),
             style(name).bold(),
             style("fresh").green(),
@@ -41,6 +71,12 @@ impl Ui {
 
     /// Print status for a stale check
     pub fn print_status_stale(&self, name: &str, reason: &StalenessReason) {
+        self.print_status_stale_indented(name, reason, 0);
+    }
+
+    /// Print status for a stale check with indentation
+    pub fn print_status_stale_indented(&self, name: &str, reason: &StalenessReason, indent: usize) {
+        let prefix = Self::indent_str(indent);
         let reason_str = match reason {
             StalenessReason::FilesChanged { changed_files } => {
                 if changed_files.is_empty() {
@@ -56,7 +92,8 @@ impl Ui {
         };
 
         println!(
-            "{} {} - {} ({})",
+            "{}{} {} - {} ({})",
+            prefix,
             style(ICON_STALE).yellow().bold(),
             style(name).bold(),
             style("stale").yellow(),
@@ -66,8 +103,15 @@ impl Ui {
 
     /// Print status for a never-run check
     pub fn print_status_never_run(&self, name: &str) {
+        self.print_status_never_run_indented(name, 0);
+    }
+
+    /// Print status for a never-run check with indentation
+    pub fn print_status_never_run_indented(&self, name: &str, indent: usize) {
+        let prefix = Self::indent_str(indent);
         println!(
-            "{} {} - {}",
+            "{}{} {} - {}",
+            prefix,
             style(ICON_NEVER).dim(),
             style(name).bold(),
             style("never run").dim()
@@ -76,8 +120,15 @@ impl Ui {
 
     /// Print when a check is skipped (cache fresh)
     pub fn print_skipped(&self, name: &str) {
+        self.print_skipped_indented(name, 0);
+    }
+
+    /// Print when a check is skipped with indentation
+    pub fn print_skipped_indented(&self, name: &str, indent: usize) {
+        let prefix = Self::indent_str(indent);
         println!(
-            "{} {} {}",
+            "{}{} {} {}",
+            prefix,
             style(ICON_SKIPPED).dim(),
             style(name).dim(),
             style("(cache fresh)").dim()
@@ -86,18 +137,55 @@ impl Ui {
 
     /// Print when a check passes
     pub fn print_pass(&self, name: &str, duration_ms: u64) {
+        self.print_pass_indented(name, duration_ms, 0);
+    }
+
+    /// Print when a check passes with indentation
+    pub fn print_pass_indented(&self, name: &str, duration_ms: u64, indent: usize) {
+        let prefix = Self::indent_str(indent);
         println!(
-            "{} {} {}",
+            "{}{} {} {}",
+            prefix,
             style(ICON_PASS).green().bold(),
             style(name).bold(),
             style(format!("({})", format_duration(duration_ms))).dim()
         );
     }
 
+    /// Print when a check is cached (fresh)
+    pub fn print_cached(&self, name: &str) {
+        self.print_cached_indented(name, 0);
+    }
+
+    /// Print when a check is cached with indentation
+    pub fn print_cached_indented(&self, name: &str, indent: usize) {
+        let prefix = Self::indent_str(indent);
+        println!(
+            "{}{} {} {}",
+            prefix,
+            style(ICON_PASS).green().bold(),
+            style(name).bold(),
+            style("(cached)").dim()
+        );
+    }
+
     /// Print when a check fails
     pub fn print_fail(&self, name: &str, duration_ms: u64, output: Option<&str>) {
+        self.print_fail_indented(name, duration_ms, output, 0);
+    }
+
+    /// Print when a check fails with indentation
+    pub fn print_fail_indented(
+        &self,
+        name: &str,
+        duration_ms: u64,
+        output: Option<&str>,
+        indent: usize,
+    ) {
+        let prefix = Self::indent_str(indent);
         println!(
-            "{} {} {}",
+            "{}{} {} {}",
+            prefix,
             style(ICON_FAIL).red().bold(),
             style(name).bold(),
             style(format!("({})", format_duration(duration_ms))).dim()
@@ -107,14 +195,16 @@ impl Ui {
             // Print indented output, limited lines
             let lines: Vec<&str> = output.lines().collect();
             let max_lines = if self.verbose { lines.len() } else { 10 };
+            let output_prefix = format!("{}  ", prefix);
 
             for line in lines.iter().take(max_lines) {
-                println!("  {}", style(line).dim());
+                println!("{}{}", output_prefix, style(line).dim());
             }
 
             if lines.len() > max_lines {
                 println!(
-                    "  {} more lines (use --verbose to see all)",
+                    "{}{} more lines (use --verbose to see all)",
+                    output_prefix,
                     style(format!("... {} ", lines.len() - max_lines)).dim()
                 );
             }
@@ -123,15 +213,23 @@ impl Ui {
 
     /// Print wave header
     pub fn print_wave_start(&self, names: &[String]) {
+        self.print_wave_start_indented(names, 0);
+    }
+
+    /// Print wave header with indentation
+    pub fn print_wave_start_indented(&self, names: &[String], indent: usize) {
+        let prefix = Self::indent_str(indent);
         if names.len() == 1 {
             println!(
-                "{} {}",
+                "{}{} {}",
+                prefix,
                 style(ICON_RUNNING).blue().bold(),
                 style(&names[0]).bold()
             );
         } else {
             println!(
-                "{} {} {}",
+                "{}{} {} {}",
+                prefix,
                 style(ICON_RUNNING).blue().bold(),
                 names.join(", "),
                 style("(parallel)").dim()
@@ -142,22 +240,32 @@ impl Ui {
     /// Print summary at end of run
     pub fn print_summary(&self, passed: usize, failed: usize, skipped: usize) {
         println!();
-        let total = passed + failed + skipped;
 
         if failed == 0 {
-            if skipped == total {
-                println!("{}", style("All checks cached and fresh").green());
-            } else {
+            if skipped > 0 && passed == 0 {
+                // All cached - show a nice green message
                 println!(
-                    "{}: {} passed, {} skipped",
+                    "{}: {} cached",
+                    style("Summary").bold(),
+                    style(skipped).green()
+                );
+            } else if skipped > 0 {
+                println!(
+                    "{}: {} passed, {} cached",
                     style("Summary").bold(),
                     style(passed).green(),
-                    style(skipped).dim()
+                    style(skipped).green()
+                );
+            } else {
+                println!(
+                    "{}: {} passed",
+                    style("Summary").bold(),
+                    style(passed).green()
                 );
             }
         } else {
             println!(
-                "{}: {} passed, {} failed, {} skipped",
+                "{}: {} passed, {} failed, {} cached",
                 style("Summary").bold(),
                 style(passed).green(),
                 style(failed).red(),

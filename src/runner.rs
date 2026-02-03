@@ -1,8 +1,10 @@
 use crate::cache::{CacheState, CheckResult, StalenessReason, StalenessStatus};
-use crate::config::{Config, Verification};
+use crate::config::{Config, Subproject, Verification, VerificationItem};
 use crate::graph::DependencyGraph;
 use crate::hasher::{compute_check_hash, find_changed_files, HashResult};
-use crate::output::{CheckStatusJson, RunResults, StatusOutput};
+use crate::output::{
+    CheckStatusJson, RunResults, StatusItemJson, StatusOutput, SubprojectStatusJson,
+};
 use crate::ui::Ui;
 use anyhow::Result;
 use rayon::prelude::*;
@@ -96,56 +98,8 @@ pub fn run_status(
     json: bool,
     _detailed: bool,
 ) -> Result<()> {
-    let graph = DependencyGraph::from_config(config)?;
     let ui = Ui::new(false);
-
-    // Track which checks are stale (for dependency propagation)
-    let mut is_stale: HashMap<String, bool> = HashMap::new();
-
-    // Process in execution order to properly handle dependencies
-    let waves = graph.execution_waves();
-    let mut status_items: Vec<CheckStatusJson> = Vec::new();
-
-    for wave in waves {
-        for name in wave {
-            let check = config.get(&name).unwrap();
-            let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
-            let staleness = compute_staleness(check, &hash_result, cache, &is_stale);
-
-            // Record staleness for dependent checks
-            is_stale.insert(
-                name.clone(),
-                !matches!(staleness, StalenessStatus::Fresh),
-            );
-
-            if json {
-                let item = match &staleness {
-                    StalenessStatus::Fresh => {
-                        let cached = cache.get(&name).unwrap();
-                        CheckStatusJson::fresh(&name, cached)
-                    }
-                    StalenessStatus::Stale { reason } => {
-                        CheckStatusJson::stale(&name, reason, cache.get(&name))
-                    }
-                    StalenessStatus::NeverRun => CheckStatusJson::never_run(&name),
-                };
-                status_items.push(item);
-            } else {
-                match &staleness {
-                    StalenessStatus::Fresh => {
-                        let cached = cache.get(&name).unwrap();
-                        ui.print_status_fresh(&name, &cached.last_run, cached.duration_ms);
-                    }
-                    StalenessStatus::Stale { reason } => {
-                        ui.print_status_stale(&name, reason);
-                    }
-                    StalenessStatus::NeverRun => {
-                        ui.print_status_never_run(&name);
-                    }
-                }
-            }
-        }
-    }
+    let status_items = run_status_recursive(project_root, config, cache, &ui, json, 0)?;
 
     if json {
         let output = StatusOutput {
@@ -155,6 +109,166 @@ pub fn run_status(
     }
 
     Ok(())
+}
+
+/// Recursively process status for config and all subprojects
+fn run_status_recursive(
+    project_root: &Path,
+    config: &Config,
+    cache: &CacheState,
+    ui: &Ui,
+    json: bool,
+    indent: usize,
+) -> Result<Vec<StatusItemJson>> {
+    let graph = DependencyGraph::from_config(config)?;
+
+    // Track which checks are stale (for dependency propagation)
+    let mut is_stale: HashMap<String, bool> = HashMap::new();
+
+    // Process verifications in execution order
+    let waves = graph.execution_waves();
+    let mut status_items: Vec<StatusItemJson> = Vec::new();
+
+    // Build a map of verification name to position in config for ordering
+    let mut verification_order: HashMap<String, usize> = HashMap::new();
+    for (idx, item) in config.verifications.iter().enumerate() {
+        verification_order.insert(item.name().to_string(), idx);
+    }
+
+    // Process all verifications first (in wave order for dependency propagation)
+    let mut verification_statuses: HashMap<String, (StalenessStatus, Option<CheckStatusJson>)> =
+        HashMap::new();
+
+    for wave in waves {
+        for name in wave {
+            let check = config.get(&name).unwrap();
+            let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
+            let staleness = compute_staleness(check, &hash_result, cache, &is_stale);
+
+            // Record staleness for dependent checks
+            is_stale.insert(name.clone(), !matches!(staleness, StalenessStatus::Fresh));
+
+            let json_item = match &staleness {
+                StalenessStatus::Fresh => {
+                    let cached = cache.get(&name).unwrap();
+                    Some(CheckStatusJson::fresh(&name, cached))
+                }
+                StalenessStatus::Stale { reason } => {
+                    Some(CheckStatusJson::stale(&name, reason, cache.get(&name)))
+                }
+                StalenessStatus::NeverRun => Some(CheckStatusJson::never_run(&name)),
+            };
+
+            verification_statuses.insert(name.clone(), (staleness, json_item));
+        }
+    }
+
+    // Now iterate through config items in order to preserve ordering
+    for item in &config.verifications {
+        match item {
+            VerificationItem::Verification(v) => {
+                let (staleness, json_item) = verification_statuses.remove(&v.name).unwrap();
+
+                if json {
+                    if let Some(item) = json_item {
+                        status_items.push(StatusItemJson::Check(item));
+                    }
+                } else {
+                    match &staleness {
+                        StalenessStatus::Fresh => {
+                            let cached = cache.get(&v.name).unwrap();
+                            ui.print_status_fresh_indented(
+                                &v.name,
+                                &cached.last_run,
+                                cached.duration_ms,
+                                indent,
+                            );
+                        }
+                        StalenessStatus::Stale { reason } => {
+                            ui.print_status_stale_indented(&v.name, reason, indent);
+                        }
+                        StalenessStatus::NeverRun => {
+                            ui.print_status_never_run_indented(&v.name, indent);
+                        }
+                    }
+                }
+            }
+            VerificationItem::Subproject(s) => {
+                let sub_items =
+                    run_status_subproject(project_root, s, ui, json, indent)?;
+
+                if json {
+                    status_items.push(StatusItemJson::Subproject(SubprojectStatusJson::new(
+                        &s.name,
+                        s.path.to_string_lossy().as_ref(),
+                        sub_items,
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(status_items)
+}
+
+/// Run status for a subproject
+fn run_status_subproject(
+    parent_root: &Path,
+    subproject: &Subproject,
+    ui: &Ui,
+    json: bool,
+    indent: usize,
+) -> Result<Vec<StatusItemJson>> {
+    let subproject_dir = parent_root.join(&subproject.path);
+    let subproject_config_path = subproject_dir.join("vfy.yaml");
+
+    let sub_config = Config::load_with_base(&subproject_config_path, &subproject_dir)?;
+    let sub_cache = CacheState::load(&subproject_dir)?;
+
+    // For human output, print subproject header
+    if !json {
+        // Determine if subproject has any stale checks
+        let has_stale = check_has_stale(&subproject_dir, &sub_config, &sub_cache)?;
+        ui.print_subproject_header(&subproject.name, indent, has_stale);
+    }
+
+    // Recursively process subproject
+    run_status_recursive(&subproject_dir, &sub_config, &sub_cache, ui, json, indent + 1)
+}
+
+/// Check if a config has any stale checks
+fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> Result<bool> {
+    let graph = DependencyGraph::from_config(config)?;
+    let mut is_stale: HashMap<String, bool> = HashMap::new();
+
+    for wave in graph.execution_waves() {
+        for name in wave {
+            if let Some(check) = config.get(&name) {
+                let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
+                let staleness = compute_staleness(check, &hash_result, cache, &is_stale);
+                let stale = !matches!(staleness, StalenessStatus::Fresh);
+                is_stale.insert(name.clone(), stale);
+                if stale {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    // Also check subprojects
+    for subproject in config.subprojects() {
+        let subproject_dir = project_root.join(&subproject.path);
+        let sub_config_path = subproject_dir.join("vfy.yaml");
+        if sub_config_path.exists() {
+            let sub_config = Config::load_with_base(&sub_config_path, &subproject_dir)?;
+            let sub_cache = CacheState::load(&subproject_dir)?;
+            if check_has_stale(&subproject_dir, &sub_config, &sub_cache)? {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 /// Run verification checks
@@ -168,163 +282,12 @@ pub fn run_checks(
     json: bool,
     verbose: bool,
 ) -> Result<i32> {
-    let graph = DependencyGraph::from_config(config)?;
     let ui = Ui::new(verbose);
+    let final_results =
+        run_checks_recursive(project_root, config, cache, &names, run_all, force, json, &ui, 0)?;
 
-    // Get checks to run (respecting dependencies)
-    let checks_to_run = graph.checks_to_run(config, &names);
-
-    // Compute hashes for all checks
-    let mut hash_results: HashMap<String, HashResult> = HashMap::new();
-    for check in &checks_to_run {
-        let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
-        hash_results.insert(check.name.clone(), hash_result);
-    }
-
-    // Track staleness and execution status
-    let is_stale: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
-    let results: Arc<Mutex<RunResults>> = Arc::new(Mutex::new(RunResults::default()));
-
-    // Execute in waves
-    let waves = graph.execution_waves();
-
-    for wave in waves {
-        // Filter to only checks we're running
-        let wave_checks: Vec<&Verification> = wave
-            .iter()
-            .filter_map(|name| checks_to_run.iter().find(|c| &c.name == name).copied())
-            .collect();
-
-        if wave_checks.is_empty() {
-            continue;
-        }
-
-        // Determine which checks in this wave need to run
-        let checks_needing_run: Vec<(&Verification, HashResult, StalenessStatus)> = wave_checks
-            .iter()
-            .map(|check| {
-                let hash_result = hash_results.remove(&check.name).unwrap();
-                let staleness = {
-                    let stale_map = is_stale.lock().unwrap();
-                    compute_staleness(check, &hash_result, cache, &stale_map)
-                };
-                (*check, hash_result, staleness)
-            })
-            .collect();
-
-        // Print wave start for human output
-        if !json {
-            let running_names: Vec<String> = checks_needing_run
-                .iter()
-                .filter(|(_, _, s)| force || run_all || !matches!(s, StalenessStatus::Fresh))
-                .map(|(c, _, _)| c.name.clone())
-                .collect();
-
-            if !running_names.is_empty() {
-                ui.print_wave_start(&running_names);
-            }
-        }
-
-        // Execute checks in parallel
-        let check_results: Vec<Option<CheckExecution>> = checks_needing_run
-            .into_par_iter()
-            .map(|(check, hash_result, staleness)| {
-                let should_run = force || run_all || !matches!(staleness, StalenessStatus::Fresh);
-
-                if !should_run {
-                    // Skip - cache fresh
-                    let mut results = results.lock().unwrap();
-                    let cached = cache.get(&check.name);
-                    results.add_pass(
-                        &check.name,
-                        cached.map(|c| c.duration_ms).unwrap_or(0),
-                        true,
-                    );
-
-                    // Mark as not stale
-                    is_stale.lock().unwrap().insert(check.name.clone(), false);
-
-                    return None;
-                }
-
-                // Execute the check
-                let start = Instant::now();
-                let (success, exit_code, output) =
-                    execute_command(&check.command, project_root, check.timeout_secs);
-                let duration = start.elapsed();
-                let duration_ms = duration.as_millis() as u64;
-
-                let result = if success {
-                    CheckResult::Pass
-                } else {
-                    CheckResult::Fail
-                };
-
-                // Mark staleness based on result
-                is_stale
-                    .lock()
-                    .unwrap()
-                    .insert(check.name.clone(), result == CheckResult::Fail);
-
-                Some(CheckExecution {
-                    name: check.name.clone(),
-                    result,
-                    duration_ms,
-                    exit_code,
-                    output: Some(output),
-                    content_hash: hash_result.combined_hash.clone(),
-                    hash_result,
-                })
-            })
-            .collect();
-
-        // Process results and update cache
-        for execution in check_results.into_iter().flatten() {
-            // Update cache
-            cache.update(
-                &execution.name,
-                execution.result,
-                execution.duration_ms,
-                Some(execution.content_hash),
-                execution.hash_result.file_hashes,
-            );
-
-            // Update results
-            let mut run_results = results.lock().unwrap();
-            match execution.result {
-                CheckResult::Pass => {
-                    if !json {
-                        ui.print_pass(&execution.name, execution.duration_ms);
-                    }
-                    run_results.add_pass(&execution.name, execution.duration_ms, false);
-                }
-                CheckResult::Fail => {
-                    if !json {
-                        ui.print_fail(
-                            &execution.name,
-                            execution.duration_ms,
-                            execution.output.as_deref(),
-                        );
-                    }
-                    run_results.add_fail(
-                        &execution.name,
-                        execution.duration_ms,
-                        execution.exit_code,
-                        execution.output,
-                    );
-                }
-            }
-        }
-    }
-
-    // Save cache
+    // Save cache for root project
     cache.save(project_root)?;
-
-    // Output results
-    let final_results = Arc::try_unwrap(results)
-        .unwrap()
-        .into_inner()
-        .unwrap();
 
     let failed_count = final_results.failed;
 
@@ -341,4 +304,303 @@ pub fn run_checks(
     } else {
         Ok(0)
     }
+}
+
+/// Recursively run checks for config and all subprojects
+fn run_checks_recursive(
+    project_root: &Path,
+    config: &Config,
+    cache: &mut CacheState,
+    names: &[String],
+    run_all: bool,
+    force: bool,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+) -> Result<RunResults> {
+    let mut final_results = RunResults::default();
+
+    // Track which items have been executed and their staleness
+    let mut executed: HashMap<String, bool> = HashMap::new(); // name -> had_failures
+
+    // Process items in config order, but handle dependencies first
+    for item in &config.verifications {
+        execute_item_with_deps(
+            project_root,
+            config,
+            cache,
+            item,
+            names,
+            run_all,
+            force,
+            json,
+            ui,
+            indent,
+            &mut executed,
+            &mut final_results,
+        )?;
+    }
+
+    Ok(final_results)
+}
+
+/// Execute an item (verification or subproject) and its dependencies
+fn execute_item_with_deps(
+    project_root: &Path,
+    config: &Config,
+    cache: &mut CacheState,
+    item: &VerificationItem,
+    names: &[String],
+    run_all: bool,
+    force: bool,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+    executed: &mut HashMap<String, bool>,
+    results: &mut RunResults,
+) -> Result<()> {
+    let item_name = item.name().to_string();
+
+    // Skip if already executed
+    if executed.contains_key(&item_name) {
+        return Ok(());
+    }
+
+    // For verifications, first execute any dependencies
+    if let VerificationItem::Verification(v) = item {
+        for dep_name in &v.depends_on {
+            // Check if dependency is a subproject
+            if let Some(sub) = config.get_subproject(dep_name) {
+                // Execute subproject if not already done
+                if !executed.contains_key(dep_name) {
+                    let sub_results = run_checks_subproject(
+                        project_root,
+                        sub,
+                        run_all,
+                        force,
+                        json,
+                        ui,
+                        indent,
+                    )?;
+                    let had_failures = sub_results.failed > 0;
+                    executed.insert(dep_name.clone(), had_failures);
+                    results.add_subproject(
+                        dep_name,
+                        sub.path.to_string_lossy().as_ref(),
+                        sub_results,
+                    );
+                }
+            } else if let Some(dep_v) = config.get(dep_name) {
+                // Execute verification dependency if not already done
+                if !executed.contains_key(dep_name) {
+                    execute_verification(
+                        project_root,
+                        dep_v,
+                        cache,
+                        run_all,
+                        force,
+                        json,
+                        ui,
+                        indent,
+                        executed,
+                        results,
+                    )?;
+                }
+            }
+        }
+    }
+
+    // Now execute the item itself
+    match item {
+        VerificationItem::Verification(v) => {
+            // Skip if not in requested names (when names is non-empty)
+            if !names.is_empty() && !names.contains(&v.name) {
+                return Ok(());
+            }
+            execute_verification(
+                project_root,
+                v,
+                cache,
+                run_all,
+                force,
+                json,
+                ui,
+                indent,
+                executed,
+                results,
+            )?;
+        }
+        VerificationItem::Subproject(s) => {
+            if !executed.contains_key(&s.name) {
+                let sub_results = run_checks_subproject(
+                    project_root,
+                    s,
+                    run_all,
+                    force,
+                    json,
+                    ui,
+                    indent,
+                )?;
+                let had_failures = sub_results.failed > 0;
+                executed.insert(s.name.clone(), had_failures);
+                results.add_subproject(
+                    &s.name,
+                    s.path.to_string_lossy().as_ref(),
+                    sub_results,
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute a single verification
+fn execute_verification(
+    project_root: &Path,
+    check: &Verification,
+    cache: &mut CacheState,
+    run_all: bool,
+    force: bool,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+    executed: &mut HashMap<String, bool>,
+    results: &mut RunResults,
+) -> Result<()> {
+    // Skip if already executed
+    if executed.contains_key(&check.name) {
+        return Ok(());
+    }
+
+    // Check if any dependency failed
+    let dep_failed = check.depends_on.iter().any(|dep| {
+        executed.get(dep).copied().unwrap_or(false)
+    });
+
+    // Compute staleness
+    let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
+
+    // Build staleness map from executed checks
+    let dep_staleness: HashMap<String, bool> = executed
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+
+    let staleness = if dep_failed {
+        StalenessStatus::Stale {
+            reason: StalenessReason::DependencyStale {
+                dependency: check.depends_on.iter()
+                    .find(|d| executed.get(*d).copied().unwrap_or(false))
+                    .unwrap_or(&check.depends_on[0])
+                    .clone(),
+            },
+        }
+    } else {
+        compute_staleness(check, &hash_result, cache, &dep_staleness)
+    };
+
+    let should_run = force || run_all || !matches!(staleness, StalenessStatus::Fresh);
+
+    if !should_run {
+        // Skip - cache fresh, but still show it green
+        if !json {
+            ui.print_cached_indented(&check.name, indent);
+        }
+        let cached = cache.get(&check.name);
+        results.add_pass(
+            &check.name,
+            cached.map(|c| c.duration_ms).unwrap_or(0),
+            true,
+        );
+        executed.insert(check.name.clone(), false);
+        return Ok(());
+    }
+
+    // Print running indicator
+    if !json {
+        ui.print_wave_start_indented(&[check.name.clone()], indent);
+    }
+
+    // Execute the check
+    let start = Instant::now();
+    let (success, exit_code, output) =
+        execute_command(&check.command, project_root, check.timeout_secs);
+    let duration = start.elapsed();
+    let duration_ms = duration.as_millis() as u64;
+
+    let result = if success {
+        CheckResult::Pass
+    } else {
+        CheckResult::Fail
+    };
+
+    // Update cache
+    cache.update(
+        &check.name,
+        result,
+        duration_ms,
+        Some(hash_result.combined_hash.clone()),
+        hash_result.file_hashes,
+    );
+
+    // Record result
+    executed.insert(check.name.clone(), result == CheckResult::Fail);
+
+    match result {
+        CheckResult::Pass => {
+            if !json {
+                ui.print_pass_indented(&check.name, duration_ms, indent);
+            }
+            results.add_pass(&check.name, duration_ms, false);
+        }
+        CheckResult::Fail => {
+            if !json {
+                ui.print_fail_indented(&check.name, duration_ms, Some(&output), indent);
+            }
+            results.add_fail(&check.name, duration_ms, exit_code, Some(output));
+        }
+    }
+
+    Ok(())
+}
+
+/// Run checks for a subproject
+fn run_checks_subproject(
+    parent_root: &Path,
+    subproject: &Subproject,
+    run_all: bool,
+    force: bool,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+) -> Result<RunResults> {
+    let subproject_dir = parent_root.join(&subproject.path);
+    let subproject_config_path = subproject_dir.join("vfy.yaml");
+
+    let sub_config = Config::load_with_base(&subproject_config_path, &subproject_dir)?;
+    let mut sub_cache = CacheState::load(&subproject_dir)?;
+
+    // For human output, print subproject header
+    if !json {
+        ui.print_subproject_header(&subproject.name, indent, false);
+    }
+
+    // Recursively run checks (run all checks in subprojects, empty names = all)
+    let sub_results = run_checks_recursive(
+        &subproject_dir,
+        &sub_config,
+        &mut sub_cache,
+        &[],
+        run_all,
+        force,
+        json,
+        ui,
+        indent + 1,
+    )?;
+
+    // Save subproject cache
+    sub_cache.save(&subproject_dir)?;
+
+    Ok(sub_results)
 }
