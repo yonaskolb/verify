@@ -43,12 +43,14 @@ fn apply_pattern(output: &str, pattern: &MetadataPattern) -> Option<String> {
     match pattern {
         MetadataPattern::Simple(pat) => {
             let re = Regex::new(pat).ok()?;
-            let caps = re.captures(output)?;
+            // Use last match since relevant output is typically at the end
+            let caps = re.captures_iter(output).last()?;
             caps.get(1).map(|m| m.as_str().to_string())
         }
         MetadataPattern::WithReplacement(pat, repl) => {
             let re = Regex::new(pat).ok()?;
-            let caps = re.captures(output)?;
+            // Use last match since relevant output is typically at the end
+            let caps = re.captures_iter(output).last()?;
             // Expand $1, $2, etc. in replacement string
             let mut result = repl.clone();
             for (i, cap) in caps.iter().enumerate().skip(1) {
@@ -166,5 +168,23 @@ mod tests {
         let current = MetadataValue::String("a".to_string());
         let prev = MetadataValue::String("b".to_string());
         assert_eq!(compute_delta(&current, &prev), None);
+    }
+
+    #[test]
+    fn test_multiple_matches_uses_last() {
+        let mut patterns = HashMap::new();
+        patterns.insert(
+            "count".to_string(),
+            MetadataPattern::Simple(r"Total: (\d+)".to_string()),
+        );
+
+        // Output with multiple matches - should use the last one (99)
+        let output = "Total: 10\nProcessing...\nTotal: 50\nMore work...\nTotal: 99";
+        let metadata = extract_metadata(output, &patterns);
+
+        match metadata.get("count") {
+            Some(MetadataValue::Integer(99)) => {}
+            other => panic!("Expected Integer(99) (last match), got {:?}", other),
+        }
     }
 }
