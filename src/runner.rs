@@ -571,7 +571,8 @@ fn execute_verification(
         let cached = cache.get(&check.name);
         if !json {
             let pb = create_running_indicator(&check.name, indent);
-            finish_cached(&pb, &check.name, indent);
+            let cached_metadata = cached.map(|c| &c.metadata);
+            finish_cached(&pb, &check.name, cached_metadata.unwrap_or(&HashMap::new()), indent);
         }
         // For cached (skipped) checks, pass empty metadata since we didn't run the command
         let empty_metadata = HashMap::new();

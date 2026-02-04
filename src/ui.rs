@@ -344,8 +344,13 @@ pub fn finish_pass(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize
     ));
 }
 
-/// Finish a running indicator with cached state (green circle)
-pub fn finish_cached(pb: &ProgressBar, name: &str, indent: usize) {
+/// Finish a running indicator with cached state (green circle) + metadata display
+pub fn finish_cached(
+    pb: &ProgressBar,
+    name: &str,
+    metadata: &HashMap<String, MetadataValue>,
+    indent: usize,
+) {
     let prefix = "    ".repeat(indent);
     pb.set_style(
         ProgressStyle::default_spinner()
@@ -358,6 +363,11 @@ pub fn finish_cached(pb: &ProgressBar, name: &str, indent: usize) {
         style(name).bold(),
         style("(cached)").dim()
     ));
+
+    // Print metadata below (if any)
+    if !metadata.is_empty() {
+        print_metadata(metadata, None, indent);
+    }
 }
 
 /// Finish a running indicator with fail state (red circle)
