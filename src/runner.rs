@@ -748,6 +748,9 @@ fn execute_verification(
         }
     }
 
+    // Save cache immediately after check completes
+    cache.save(project_root)?;
+
     Ok(())
 }
 
@@ -865,6 +868,10 @@ fn execute_per_file(
                 prev_metadata.as_ref(),
                 prev_duration,
             );
+
+            // Save cache immediately after per_file check fails
+            cache.save(project_root)?;
+
             return Ok(());
         }
 
@@ -897,6 +904,9 @@ fn execute_per_file(
         prev_metadata.as_ref(),
         prev_duration,
     );
+
+    // Save cache immediately after per_file check completes
+    cache.save(project_root)?;
 
     Ok(())
 }

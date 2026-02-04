@@ -209,6 +209,7 @@ mod tests {
                         depends_on: deps.into_iter().map(String::from).collect(),
                         timeout_secs: None,
                         metadata: std::collections::HashMap::new(),
+                        per_file: false,
                     })
                 })
                 .collect(),
