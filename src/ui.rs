@@ -241,24 +241,27 @@ impl Ui {
     }
 
     /// Print summary at end of run
-    pub fn print_summary(&self, passed: usize, failed: usize, skipped: usize) {
+    pub fn print_summary(&self, passed: usize, failed: usize, skipped: usize, duration_ms: u64) {
         println!();
 
         // Treat cached as passed
         let total_passed = passed + skipped;
+        let duration_str = format!("({})", format_duration(duration_ms));
 
         if failed == 0 {
             println!(
-                "{}: {} passed",
+                "{}: {} passed {}",
                 style("Summary").bold(),
-                style(total_passed).green()
+                style(total_passed).green(),
+                style(duration_str).dim()
             );
         } else {
             println!(
-                "{}: {} passed, {} failed",
+                "{}: {} passed, {} failed {}",
                 style("Summary").bold(),
                 style(total_passed).green(),
-                style(failed).red()
+                style(failed).red(),
+                style(duration_str).dim()
             );
         }
     }
@@ -365,22 +368,9 @@ pub fn finish_fail(pb: &ProgressBar, name: &str, command: &str, duration_ms: u64
     println!("{}  {}", prefix, style(command).red());
 }
 
-/// Format duration with optional delta from previous run
-fn format_duration_with_delta(current: u64, prev: Option<u64>) -> String {
-    let current_str = format_duration(current);
-    match prev {
-        None => format!("({})", current_str),
-        Some(p) => {
-            let delta = current as i64 - p as i64;
-            if delta == 0 {
-                format!("({})", current_str)
-            } else if delta > 0 {
-                format!("({}, +{})", current_str, format_duration(delta as u64))
-            } else {
-                format!("({}, -{})", current_str, format_duration((-delta) as u64))
-            }
-        }
-    }
+/// Format duration for display
+fn format_duration_display(current: u64) -> String {
+    format!("({})", format_duration(current))
 }
 
 /// Format a numeric delta for display
@@ -431,13 +421,12 @@ pub fn finish_pass_with_metadata(
     pb: &ProgressBar,
     name: &str,
     duration_ms: u64,
-    prev_duration: Option<u64>,
     metadata: &HashMap<String, MetadataValue>,
     prev_metadata: Option<&HashMap<String, MetadataValue>>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
-    let duration_str = format_duration_with_delta(duration_ms, prev_duration);
+    let duration_str = format_duration_display(duration_ms);
 
     pb.set_style(
         ProgressStyle::default_spinner()
@@ -463,13 +452,12 @@ pub fn finish_fail_with_metadata(
     name: &str,
     command: &str,
     duration_ms: u64,
-    prev_duration: Option<u64>,
     metadata: &HashMap<String, MetadataValue>,
     prev_metadata: Option<&HashMap<String, MetadataValue>>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
-    let duration_str = format_duration_with_delta(duration_ms, prev_duration);
+    let duration_str = format_duration_display(duration_ms);
 
     pb.finish_and_clear();
     println!(

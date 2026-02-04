@@ -292,6 +292,7 @@ pub fn run_checks(
     json: bool,
     verbose: bool,
 ) -> Result<i32> {
+    let start_time = Instant::now();
     let ui = Ui::new(verbose);
     let final_results =
         run_checks_recursive(project_root, config, cache, &names, force, json, &ui, 0)?;
@@ -300,12 +301,13 @@ pub fn run_checks(
     cache.save(project_root)?;
 
     let failed_count = final_results.failed;
+    let total_duration_ms = start_time.elapsed().as_millis() as u64;
 
     if json {
         let output = final_results.to_output();
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        ui.print_summary(final_results.passed, final_results.failed, final_results.skipped);
+        ui.print_summary(final_results.passed, final_results.failed, final_results.skipped, total_duration_ms);
     }
 
     // Return exit code
@@ -588,7 +590,6 @@ fn execute_verification(
                     &pb,
                     &check.name,
                     duration_ms,
-                    prev_duration,
                     &metadata,
                     prev_metadata.as_ref(),
                     indent,
@@ -603,7 +604,6 @@ fn execute_verification(
                     &check.name,
                     &check.command,
                     duration_ms,
-                    prev_duration,
                     &metadata,
                     prev_metadata.as_ref(),
                     indent,
