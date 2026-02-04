@@ -71,3 +71,7 @@ The `test-project/` directory contains example configurations with subprojects d
 - Root config with subproject references
 - Cross-project dependencies
 - Nested cache directories
+
+## Releasing
+
+See [RELEASE.md](RELEASE.md) for instructions on creating releases.
