@@ -75,9 +75,50 @@ verifications:
 |-------|----------|-------------|
 | `name` | Yes | Unique identifier for the check |
 | `command` | Yes | Shell command to execute |
-| `cache_paths` | Yes | Glob patterns for files that affect this check |
-| `depends_on` | No | List of checks that must pass first |
-| `timeout_secs` | No | Command timeout (not yet implemented) |
+| `cache_paths` | No | Glob patterns for files that affect this check. If omitted, check always runs |
+| `depends_on` | No | List of checks or subprojects that must pass first |
+| `metadata` | No | Regex patterns for extracting metrics from output |
+
+### Subprojects
+
+Reference other `vfy.yaml` files in subdirectories:
+
+```yaml
+verifications:
+  - name: frontend
+    path: ./packages/frontend
+
+  - name: backend
+    path: ./packages/backend
+
+  - name: integration
+    command: npm run integration
+    depends_on: [frontend, backend]  # Can depend on subprojects
+    cache_paths:
+      - "tests/**/*.ts"
+```
+
+Subprojects run their own verifications and can be dependencies for other checks.
+
+### Metadata Extraction
+
+Extract metrics from command output using regex patterns:
+
+```yaml
+verifications:
+  - name: test
+    command: npm test
+    cache_paths:
+      - "src/**/*.ts"
+    metadata:
+      passed: "Tests: (\\d+) passed"
+      failed: "(\\d+) failed"
+      coverage: "Coverage: ([\\d.]+)%"
+```
+
+Captured values are stored in the cache and displayed in status output. Supports:
+- Simple patterns: Extract first capture group
+- Replacement patterns: `["(\\d+)/(\\d+)", "$1 of $2"]` for formatted output
 
 ## Usage
 
@@ -99,10 +140,10 @@ Output:
 ### Run Checks
 
 ```bash
-vfy              # Run all stale checks
-vfy run build    # Run specific check (and dependencies)
-vfy run --all    # Force run all checks
-vfy run --force  # Force run even if fresh
+vfy                    # Run all stale checks
+vfy run build          # Run specific check (and dependencies)
+vfy run --force        # Force run even if fresh
+vfy run --verbose      # Stream command output in real-time
 ```
 
 ### JSON Output
@@ -147,8 +188,9 @@ vfy clean build     # Clear specific check
 2. **Cache Storage**: Results are stored in `.vfy/cache.json`
 3. **Staleness Detection**: A check is stale if:
    - Files in `cache_paths` changed since last successful run
-   - Any dependency is stale
+   - Any dependency (check or subproject) is stale
    - Last run failed
+   - No `cache_paths` defined (always runs)
 4. **Parallel Execution**: Independent checks run concurrently
 5. **Dependency Ordering**: Checks run in topological order respecting `depends_on`
 
