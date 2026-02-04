@@ -14,7 +14,7 @@ pub struct Cli {
     pub json: bool,
 
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub verbose: bool,
 
     #[command(subcommand)]
