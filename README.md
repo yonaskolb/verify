@@ -16,10 +16,16 @@ In agent-driven development, verification is key to assuring what gets built is 
 ## Installation
 
 ```bash
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/yonaskolb/verify/master/install.sh | sh
 ```
 
-Or build from source:
+### From source
+
+```bash
+cargo install --git https://github.com/yonaskolb/verify
+```
+
+Or clone and build:
 
 ```bash
 cargo build --release
