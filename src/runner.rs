@@ -14,7 +14,8 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -31,25 +32,73 @@ pub struct CheckExecution {
 }
 
 /// Execute a single command
-fn execute_command(command: &str, project_root: &Path, _timeout_secs: Option<u64>) -> (bool, Option<i32>, String) {
-    let result = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(project_root)
-        .output();
+fn execute_command(command: &str, project_root: &Path, _timeout_secs: Option<u64>, verbose: bool) -> (bool, Option<i32>, String) {
+    if verbose {
+        // Stream output in real-time while also capturing it
+        let mut child = match Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(project_root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => return (false, None, format!("Failed to execute command: {}", e)),
+        };
 
-    match result {
-        Ok(output) => {
-            let success = output.status.success();
-            let exit_code = output.status.code();
-            let combined_output = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            (success, exit_code, combined_output)
+        let mut combined_output = String::new();
+
+        // Read stdout
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    println!("{}", line);
+                    combined_output.push_str(&line);
+                    combined_output.push('\n');
+                }
+            }
         }
-        Err(e) => (false, None, format!("Failed to execute command: {}", e)),
+
+        // Read stderr
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    eprintln!("{}", line);
+                    combined_output.push_str(&line);
+                    combined_output.push('\n');
+                }
+            }
+        }
+
+        let status = child.wait();
+        match status {
+            Ok(status) => (status.success(), status.code(), combined_output),
+            Err(e) => (false, None, format!("Failed to wait for command: {}", e)),
+        }
+    } else {
+        // Original behavior: capture all output at once
+        let result = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(project_root)
+            .output();
+
+        match result {
+            Ok(output) => {
+                let success = output.status.success();
+                let exit_code = output.status.code();
+                let combined_output = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                (success, exit_code, combined_output)
+            }
+            Err(e) => (false, None, format!("Failed to execute command: {}", e)),
+        }
     }
 }
 
@@ -553,7 +602,7 @@ fn execute_verification(
     // Execute the check
     let start = Instant::now();
     let (success, exit_code, output) =
-        execute_command(&check.command, project_root, check.timeout_secs);
+        execute_command(&check.command, project_root, check.timeout_secs, ui.is_verbose());
     let duration = start.elapsed();
     let duration_ms = duration.as_millis() as u64;
 

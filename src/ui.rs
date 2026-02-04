@@ -24,6 +24,10 @@ impl Ui {
         }
     }
 
+    pub fn is_verbose(&self) -> bool {
+        self.verbose
+    }
+
     /// Generate indentation string (4 spaces per level)
     fn indent_str(indent: usize) -> String {
         "    ".repeat(indent)
