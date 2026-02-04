@@ -244,35 +244,21 @@ impl Ui {
     pub fn print_summary(&self, passed: usize, failed: usize, skipped: usize) {
         println!();
 
+        // Treat cached as passed
+        let total_passed = passed + skipped;
+
         if failed == 0 {
-            if skipped > 0 && passed == 0 {
-                // All cached - show a nice green message
-                println!(
-                    "{}: {} cached",
-                    style("Summary").bold(),
-                    style(skipped).green()
-                );
-            } else if skipped > 0 {
-                println!(
-                    "{}: {} passed, {} cached",
-                    style("Summary").bold(),
-                    style(passed).green(),
-                    style(skipped).green()
-                );
-            } else {
-                println!(
-                    "{}: {} passed",
-                    style("Summary").bold(),
-                    style(passed).green()
-                );
-            }
+            println!(
+                "{}: {} passed",
+                style("Summary").bold(),
+                style(total_passed).green()
+            );
         } else {
             println!(
-                "{}: {} passed, {} failed, {} cached",
+                "{}: {} passed, {} failed",
                 style("Summary").bold(),
-                style(passed).green(),
-                style(failed).red(),
-                style(skipped).dim()
+                style(total_passed).green(),
+                style(failed).red()
             );
         }
     }
