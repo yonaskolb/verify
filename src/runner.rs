@@ -612,8 +612,8 @@ fn execute_verification(
         CheckResult::Fail
     };
 
-    // Extract metadata from output
-    let metadata = if !check.metadata.is_empty() {
+    // Extract metadata from output (only on success)
+    let metadata = if success && !check.metadata.is_empty() {
         extract_metadata(&output, &check.metadata)
     } else {
         HashMap::new()

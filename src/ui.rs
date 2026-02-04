@@ -199,20 +199,25 @@ impl Ui {
     pub fn print_fail_output(&self, output: Option<&str>, indent: usize) {
         let prefix = Self::indent_str(indent);
         if let Some(output) = output {
-            // Print indented output, limited lines
+            // Print indented output, limited lines (show last N lines)
             let lines: Vec<&str> = output.lines().collect();
             let max_lines = if self.verbose { lines.len() } else { 10 };
             let output_prefix = format!("{}  ", prefix);
 
-            for line in lines.iter().take(max_lines) {
+            let skip_count = lines.len().saturating_sub(max_lines);
+            if skip_count > 0 {
+                println!("{}{}", output_prefix, style("...").dim());
+            }
+
+            for line in lines.iter().skip(skip_count) {
                 println!("{}{}", output_prefix, style(line).dim());
             }
 
-            if lines.len() > max_lines {
+            if skip_count > 0 {
                 println!(
-                    "{}{} more lines (use --verbose to see all)",
+                    "{}{} lines omitted (use --verbose to see all)",
                     output_prefix,
-                    style(format!("... {} ", lines.len() - max_lines)).dim()
+                    skip_count
                 );
             }
         }
