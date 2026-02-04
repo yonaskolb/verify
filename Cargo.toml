@@ -1,10 +1,10 @@
 [package]
-name = "vfy"
+name = "verify"
 version = "0.1.0"
 edition = "2024"
 description = "A CLI tool for managing project verification checks with intelligent caching"
 license = "MIT"
-repository = "https://github.com/yonas/vfy"
+repository = "https://github.com/yonas/verify"
 
 [dependencies]
 # CLI argument parsing

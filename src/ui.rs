@@ -295,8 +295,8 @@ impl Ui {
             style(ICON_CIRCLE).green().bold(),
             style(path).bold()
         );
-        println!("  Run {} to see check status", style("vfy status").cyan());
-        println!("  Run {} to execute checks", style("vfy").cyan());
+        println!("  Run {} to see check status", style("verify status").cyan());
+        println!("  Run {} to execute checks", style("verify").cyan());
     }
 
     /// Print cache cleaned message

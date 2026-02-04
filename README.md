@@ -1,16 +1,17 @@
-# vfy
+# verify
 
 A fast, lightweight CLI for managing project verification checks with intelligent caching.
 
-## Why vfy?
+## Why verify?
 
-In agent-driven development, verification is repetitive. You run the same checks over and over: typecheck, lint, test, build. Existing tools like Nx and Turborepo are powerful but heavyweight and ecosystem-specific.
+In agent-driven development, verification is key to assuring what gets built is correct. You want it to be fast and accurate. Instead of guiding the agent to run the same custom checks over and over again, and wasting tokens, you can run a single verify command that either gives the green light or provides the error context required to fix the problem.
 
-**vfy** is different:
 - **Standalone** - Works with any project, any language
 - **Simple** - One YAML file, one binary
-- **Fast** - BLAKE3 hashing, parallel execution
+- **Fast** - Written in rust, BLAKE3 hashing, parallel execution
 - **Smart** - Only re-runs checks when relevant files change
+- **Succinct** - Only returns the errors from your verifications, not the whole build output of every step
+- **Open** - Use the json output to integrate into other tools like ui.
 
 ## Installation
 
@@ -22,24 +23,24 @@ Or build from source:
 
 ```bash
 cargo build --release
-# Binary at ./target/release/vfy
+# Binary at ./target/release/verify
 ```
 
 ## Quick Start
 
 ```bash
 # Create a config file
-vfy init
+verify init
 
-# Edit vfy.yaml to define your checks
+# Edit verify.yaml to define your checks
 # Then run:
-vfy status  # See what needs to run
-vfy         # Run stale checks
+verify status  # See what needs to run
+verify         # Run stale checks
 ```
 
 ## Configuration
 
-Create a `vfy.yaml` in your project root:
+Create a `verify.yaml` in your project root:
 
 ```yaml
 verifications:
@@ -81,7 +82,7 @@ verifications:
 
 ### Subprojects
 
-Reference other `vfy.yaml` files in subdirectories:
+Reference other `verify.yaml` files in subdirectories:
 
 ```yaml
 verifications:
@@ -125,7 +126,7 @@ Captured values are stored in the cache and displayed in status output. Supports
 ### Check Status
 
 ```bash
-vfy status
+verify status
 ```
 
 Output:
@@ -140,10 +141,10 @@ Output:
 ### Run Checks
 
 ```bash
-vfy                    # Run all stale checks
-vfy run build          # Run specific check (and dependencies)
-vfy run --force        # Force run even if fresh
-vfy run --verbose      # Stream command output in real-time
+verify                    # Run all stale checks
+verify run build          # Run specific check (and dependencies)
+verify run --force        # Force run even if fresh
+verify run --verbose      # Stream command output in real-time
 ```
 
 ### JSON Output
@@ -151,8 +152,8 @@ vfy run --verbose      # Stream command output in real-time
 For tool integration:
 
 ```bash
-vfy --json status
-vfy --json run
+verify --json status
+verify --json run
 ```
 
 Example output:
@@ -178,14 +179,14 @@ Example output:
 ### Clear Cache
 
 ```bash
-vfy clean           # Clear all cached results
-vfy clean build     # Clear specific check
+verify clean           # Clear all cached results
+verify clean build     # Clear specific check
 ```
 
 ## How It Works
 
-1. **File Hashing**: vfy computes BLAKE3 hashes of all files matching `cache_paths`
-2. **Cache Storage**: Results are stored in `.vfy/cache.json`
+1. **File Hashing**: verify computes BLAKE3 hashes of all files matching `cache_paths`
+2. **Cache Storage**: Results are stored in `.verify/cache.json`
 3. **Staleness Detection**: A check is stale if:
    - Files in `cache_paths` changed since last successful run
    - Any dependency (check or subproject) is stale
@@ -204,8 +205,8 @@ vfy clean build     # Clear specific check
 
 ## Integration Ideas
 
-- **Git hooks**: Run `vfy` in pre-commit or pre-push
-- **CI/CD**: Use `vfy --json` for structured output
+- **Git hooks**: Run `verify` in pre-commit or pre-push
+- **CI/CD**: Use `verify --json` for structured output
 - **Agent tools**: Parse JSON to show verification status in UIs
 - **Watch mode**: Combine with `watchexec` or similar
 

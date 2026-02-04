@@ -9,10 +9,10 @@ use std::io::BufWriter;
 use std::path::Path;
 
 const CACHE_VERSION: u32 = 1;
-const CACHE_DIR: &str = ".vfy";
+const CACHE_DIR: &str = ".verify";
 const CACHE_FILE: &str = "cache.json";
 
-/// Root cache structure stored in .vfy/cache.json
+/// Root cache structure stored in .verify/cache.json
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct CacheState {
     /// Version for future cache format migrations

@@ -14,7 +14,7 @@ pub enum MetadataPattern {
     Simple(String),
 }
 
-/// Root configuration structure parsed from vfy.yaml
+/// Root configuration structure parsed from verify.yaml
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     pub verifications: Vec<VerificationItem>,
@@ -39,13 +39,13 @@ impl VerificationItem {
     }
 }
 
-/// A reference to a subproject with its own vfy.yaml
+/// A reference to a subproject with its own verify.yaml
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Subproject {
     /// Unique identifier for this subproject
     pub name: String,
 
-    /// Path to directory containing vfy.yaml (relative to current config)
+    /// Path to directory containing verify.yaml (relative to current config)
     pub path: PathBuf,
 }
 
@@ -59,7 +59,7 @@ pub struct Verification {
     pub command: String,
 
     /// Glob patterns for files that affect this check's cache validity
-    /// If empty or not specified, the check always runs (no vfy-level caching)
+    /// If empty or not specified, the check always runs (no verify-level caching)
     #[serde(default)]
     pub cache_paths: Vec<String>,
 
@@ -131,7 +131,7 @@ impl Config {
         for item in &self.verifications {
             if let VerificationItem::Subproject(s) = item {
                 let subproject_dir = base_path.join(&s.path);
-                let subproject_config = subproject_dir.join("vfy.yaml");
+                let subproject_config = subproject_dir.join("verify.yaml");
                 if !subproject_config.exists() {
                     anyhow::bail!(
                         "Subproject '{}' config not found: {}",
@@ -191,8 +191,8 @@ impl Config {
 
 /// Generate an example configuration file
 pub fn generate_example_config() -> String {
-    r#"# vfy configuration file
-# Run `vfy` to execute all stale checks, or `vfy status` to see check states
+    r#"# verify configuration file
+# Run `verify` to execute all stale checks, or `verify status` to see check states
 
 verifications:
   - name: build
@@ -242,9 +242,9 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
     fs::write(path, content)
         .with_context(|| format!("Failed to write config file: {}", path.display()))?;
 
-    // Add .vfy/ to .gitignore if not already present
+    // Add .verify/ to .gitignore if not already present
     let gitignore_path = path.parent().unwrap_or(Path::new(".")).join(".gitignore");
-    let cache_pattern = "**/.vfy/";
+    let cache_pattern = "**/.verify/";
 
     let should_append = if gitignore_path.exists() {
         let gitignore_content = fs::read_to_string(&gitignore_path)

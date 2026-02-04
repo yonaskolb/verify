@@ -2,11 +2,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "vfy")]
+#[command(name = "verify")]
 #[command(author, version, about = "Run and cache project verification checks")]
 pub struct Cli {
-    /// Path to config file (default: vfy.yaml)
-    #[arg(short, long, default_value = "vfy.yaml")]
+    /// Path to config file (default: verify.yaml)
+    #[arg(short, long, default_value = "verify.yaml")]
     pub config: PathBuf,
 
     /// Output in JSON format
@@ -41,7 +41,7 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Initialize a new vfy.yaml config file
+    /// Initialize a new verify.yaml config file
     Init {
         /// Overwrite existing config file
         #[arg(long)]

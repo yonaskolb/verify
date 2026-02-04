@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// JSON output for `vfy status`
+/// JSON output for `verify status`
 #[derive(Debug, Serialize)]
 pub struct StatusOutput {
     pub checks: Vec<StatusItemJson>,
@@ -104,7 +104,7 @@ impl CheckStatusJson {
     }
 }
 
-/// JSON output for `vfy run`
+/// JSON output for `verify run`
 #[derive(Debug, Serialize)]
 pub struct RunOutput {
     pub results: Vec<RunItemJson>,

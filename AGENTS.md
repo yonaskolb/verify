@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**vfy** is a Rust CLI tool for managing project verification checks (typecheck, lint, test, build) with intelligent caching. It uses BLAKE3 hashing to detect file changes and only re-runs checks when relevant files are modified.
+**verify** is a Rust CLI tool for managing project verification checks (typecheck, lint, test, build) with intelligent caching. It uses BLAKE3 hashing to detect file changes and only re-runs checks when relevant files are modified.
 
 ## Build Commands
 
@@ -19,7 +19,7 @@ cargo build --release
 cargo install --path .
 
 # Run against test project
-./test-project.sh [args]  # Builds and runs: ./target/debug/vfy --config test-project/vfy.yaml run [args]
+./test-project.sh [args]  # Builds and runs: ./target/debug/verify --config test-project/verify.yaml run [args]
 ```
 
 ## Architecture
@@ -28,7 +28,7 @@ The codebase is organized into focused modules in `src/`:
 
 - **main.rs / cli.rs** - Entry point and CLI parsing (subcommands: `init`, `status`, `run`, `clean`)
 - **config.rs** - YAML configuration parsing and validation (checks for cycles, duplicates, unknown deps)
-- **cache.rs** - Cache state management, stored as JSON in `.vfy/cache.json`
+- **cache.rs** - Cache state management, stored as JSON in `.verify/cache.json`
 - **hasher.rs** - BLAKE3 file hashing for change detection
 - **runner.rs** - Check execution with dependency ordering and parallel execution
 - **graph.rs** - Dependency graph using petgraph, topological sorting, parallel "wave" grouping
@@ -48,7 +48,7 @@ The codebase is organized into focused modules in `src/`:
 
 **Exit Codes**: 0 (success), 1 (failures), 2 (configuration error)
 
-## Configuration Format (vfy.yaml)
+## Configuration Format (verify.yaml)
 
 ```yaml
 verifications:
@@ -61,7 +61,8 @@ verifications:
     metadata:                   # optional - regex extraction
       key: "pattern"
 
-  - subproject: packages/frontend  # references another vfy.yaml
+  - name: frontend
+    path: packages/frontend  # references another verify.yaml
 ```
 
 ## Test Fixtures

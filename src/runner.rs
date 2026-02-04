@@ -280,7 +280,7 @@ fn run_status_subproject(
     indent: usize,
 ) -> Result<Vec<StatusItemJson>> {
     let subproject_dir = parent_root.join(&subproject.path);
-    let subproject_config_path = subproject_dir.join("vfy.yaml");
+    let subproject_config_path = subproject_dir.join("verify.yaml");
 
     let sub_config = Config::load_with_base(&subproject_config_path, &subproject_dir)?;
     let sub_cache = CacheState::load(&subproject_dir)?;
@@ -318,7 +318,7 @@ fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> 
     // Also check subprojects
     for subproject in config.subprojects() {
         let subproject_dir = project_root.join(&subproject.path);
-        let sub_config_path = subproject_dir.join("vfy.yaml");
+        let sub_config_path = subproject_dir.join("verify.yaml");
         if sub_config_path.exists() {
             let sub_config = Config::load_with_base(&sub_config_path, &subproject_dir)?;
             let sub_cache = CacheState::load(&subproject_dir)?;
@@ -681,7 +681,7 @@ fn run_checks_subproject(
     indent: usize,
 ) -> Result<RunResults> {
     let subproject_dir = parent_root.join(&subproject.path);
-    let subproject_config_path = subproject_dir.join("vfy.yaml");
+    let subproject_config_path = subproject_dir.join("verify.yaml");
 
     let sub_config = Config::load_with_base(&subproject_config_path, &subproject_dir)?;
     let mut sub_cache = CacheState::load(&subproject_dir)?;

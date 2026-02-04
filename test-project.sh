@@ -2,4 +2,4 @@
 set -e
 
 cargo build --quiet
-./target/debug/vfy --config test-project/vfy.yaml "$@"
+./target/debug/verify --config test-project/verify.yaml "$@"
