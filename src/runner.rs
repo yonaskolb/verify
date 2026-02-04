@@ -32,16 +32,25 @@ pub struct CheckExecution {
 }
 
 /// Execute a single command
-fn execute_command(command: &str, project_root: &Path, _timeout_secs: Option<u64>, verbose: bool) -> (bool, Option<i32>, String) {
+fn execute_command(
+    command: &str,
+    project_root: &Path,
+    _timeout_secs: Option<u64>,
+    verbose: bool,
+    env_vars: &[(&str, &str)],
+) -> (bool, Option<i32>, String) {
     if verbose {
         // Stream output in real-time while also capturing it
-        let mut child = match Command::new("sh")
-            .arg("-c")
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
             .arg(command)
             .current_dir(project_root)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+        let mut child = match cmd.spawn()
         {
             Ok(child) => child,
             Err(e) => return (false, None, format!("Failed to execute command: {}", e)),
@@ -80,11 +89,14 @@ fn execute_command(command: &str, project_root: &Path, _timeout_secs: Option<u64
         }
     } else {
         // Original behavior: capture all output at once
-        let result = Command::new("sh")
-            .arg("-c")
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
             .arg(command)
-            .current_dir(project_root)
-            .output();
+            .current_dir(project_root);
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+        let result = cmd.output();
 
         match result {
             Ok(output) => {
@@ -147,6 +159,46 @@ fn compute_staleness(
             }
         }
         _ => status,
+    }
+}
+
+/// Get list of stale file paths for per_file mode
+fn get_stale_files(
+    staleness: &StalenessStatus,
+    current_hashes: &HashResult,
+) -> Vec<String> {
+    match staleness {
+        StalenessStatus::NeverRun => {
+            // All files are new
+            current_hashes.file_hashes.keys().cloned().collect()
+        }
+        StalenessStatus::Stale { reason } => {
+            match reason {
+                StalenessReason::FilesChanged { changed_files } => {
+                    // Parse "M file" / "+ file" format to get just paths
+                    // Skip deleted files ("- file") - nothing to run for them
+                    changed_files
+                        .iter()
+                        .filter_map(|s| {
+                            if s.starts_with("- ") {
+                                None // Skip deleted files
+                            } else if s.len() > 2 {
+                                Some(s[2..].to_string()) // Remove "M " or "+ " prefix
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }
+                StalenessReason::DependencyStale { .. }
+                | StalenessReason::LastRunFailed
+                | StalenessReason::NoCachePaths => {
+                    // Re-run all files
+                    current_hashes.file_hashes.keys().cloned().collect()
+                }
+            }
+        }
+        StalenessStatus::Fresh => vec![], // Shouldn't happen if should_run is true
     }
 }
 
@@ -588,6 +640,29 @@ fn execute_verification(
         return Ok(());
     }
 
+    // Get previous cache for duration and metadata deltas
+    let prev_cache = cache.get(&check.name);
+    let prev_duration = prev_cache.map(|c| c.duration_ms);
+    let prev_metadata = prev_cache.map(|c| c.metadata.clone());
+
+    // Handle per_file mode
+    if check.per_file {
+        return execute_per_file(
+            project_root,
+            check,
+            cache,
+            &hash_result,
+            &staleness,
+            json,
+            ui,
+            indent,
+            executed,
+            results,
+            prev_duration,
+            prev_metadata,
+        );
+    }
+
     // Create running indicator (blue circle that updates in place)
     let pb = if !json {
         Some(create_running_indicator(&check.name, indent))
@@ -595,15 +670,10 @@ fn execute_verification(
         None
     };
 
-    // Get previous cache for duration and metadata deltas
-    let prev_cache = cache.get(&check.name);
-    let prev_duration = prev_cache.map(|c| c.duration_ms);
-    let prev_metadata = prev_cache.map(|c| c.metadata.clone());
-
     // Execute the check
     let start = Instant::now();
     let (success, exit_code, output) =
-        execute_command(&check.command, project_root, check.timeout_secs, ui.is_verbose());
+        execute_command(&check.command, project_root, check.timeout_secs, ui.is_verbose(), &[]);
     let duration = start.elapsed();
     let duration_ms = duration.as_millis() as u64;
 
@@ -666,6 +736,147 @@ fn execute_verification(
             results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref(), prev_duration);
         }
     }
+
+    Ok(())
+}
+
+/// Execute a verification in per_file mode
+fn execute_per_file(
+    project_root: &Path,
+    check: &Verification,
+    cache: &mut CacheState,
+    hash_result: &HashResult,
+    staleness: &StalenessStatus,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+    executed: &mut HashMap<String, bool>,
+    results: &mut RunResults,
+    prev_duration: Option<u64>,
+    prev_metadata: Option<HashMap<String, MetadataValue>>,
+) -> Result<()> {
+    let stale_files = get_stale_files(staleness, hash_result);
+    let total_files = hash_result.file_hashes.len();
+    let fresh_count = total_files.saturating_sub(stale_files.len());
+    // If no stale files - show cached count and return early
+    if stale_files.is_empty() {
+        if !json {
+            ui.print_per_file_cached(&check.name, total_files, indent);
+        }
+        let empty_metadata = HashMap::new();
+        results.add_pass(
+            &check.name,
+            prev_duration.unwrap_or(0),
+            true,
+            &empty_metadata,
+            None,
+            None,
+        );
+        executed.insert(check.name.clone(), false);
+        return Ok(());
+    }
+
+    // Show cached count first if any files are fresh
+    if fresh_count > 0 && !json {
+        ui.print_per_file_cached(&check.name, fresh_count, indent);
+    }
+
+    let start = Instant::now();
+    let mut total_duration_ms: u64 = 0;
+    let mut last_output = String::new();
+
+    // Run command for each stale file
+    for file_path in &stale_files {
+        // Create progress bar showing "check_name: file_path"
+        let display_name = format!("{}: {}", check.name, file_path);
+        let file_pb = if !json {
+            Some(create_running_indicator(&display_name, indent))
+        } else {
+            None
+        };
+
+        let env_vars = [("VERIFY_FILE", file_path.as_str())];
+
+        let file_start = Instant::now();
+        let (success, exit_code, output) = execute_command(
+            &check.command,
+            project_root,
+            check.timeout_secs,
+            ui.is_verbose(),
+            &env_vars,
+        );
+        let file_duration_ms = file_start.elapsed().as_millis() as u64;
+        total_duration_ms += file_duration_ms;
+
+        if success {
+            // Finish file progress bar as passed
+            if let Some(pb) = file_pb {
+                let empty = HashMap::new();
+                finish_pass_with_metadata(&pb, &display_name, file_duration_ms, &empty, None, indent);
+            }
+
+            // Update the file hash in cache (partial progress)
+            if let Some(file_hash) = hash_result.file_hashes.get(file_path) {
+                cache.update_per_file_hash(&check.name, file_path, file_hash.clone());
+            }
+        } else {
+            // Finish file progress bar as failed
+            if let Some(pb) = file_pb {
+                finish_fail_with_metadata(&pb, &display_name, &check.command, file_duration_ms, &HashMap::new(), None, indent);
+            }
+
+            // Print failure output
+            if !json {
+                ui.print_fail_output(Some(&output), indent);
+            }
+
+            // Mark check as failed and stop
+            total_duration_ms = start.elapsed().as_millis() as u64;
+            cache.mark_per_file_failed(&check.name, total_duration_ms);
+            executed.insert(check.name.clone(), true);
+
+            let empty_metadata = HashMap::new();
+            results.add_fail(
+                &check.name,
+                total_duration_ms,
+                exit_code,
+                Some(output),
+                &empty_metadata,
+                prev_metadata.as_ref(),
+                prev_duration,
+            );
+            return Ok(());
+        }
+
+        last_output = output;
+    }
+
+    // Extract metadata from last output (if configured)
+    let metadata = if !check.metadata.is_empty() {
+        extract_metadata(&last_output, &check.metadata)
+    } else {
+        HashMap::new()
+    };
+
+    // Finalize cache - all files passed
+    total_duration_ms = start.elapsed().as_millis() as u64;
+    cache.finalize_per_file(
+        &check.name,
+        total_duration_ms,
+        hash_result.combined_hash.clone(),
+        hash_result.file_hashes.clone(),
+        metadata.clone(),
+    );
+
+    executed.insert(check.name.clone(), false);
+    results.add_pass(
+        &check.name,
+        total_duration_ms,
+        false,
+        &metadata,
+        prev_metadata.as_ref(),
+        prev_duration,
+    );
 
     Ok(())
 }

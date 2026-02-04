@@ -170,6 +170,24 @@ impl Ui {
         );
     }
 
+    /// Print cached count for per_file mode (using progress bar for consistent newline handling)
+    pub fn print_per_file_cached(&self, name: &str, count: usize, indent: usize) {
+        let pb = crate::ui::create_running_indicator(name, indent);
+        let prefix = Self::indent_str(indent);
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template(&format!("{}{{msg}}", prefix))
+                .unwrap(),
+        );
+        pb.finish_with_message(format!(
+            "{} {} {}",
+            style(ICON_CIRCLE).green().bold(),
+            style(name).bold(),
+            style(format!("({} cached)", count)).dim()
+        ));
+    }
+
+
     /// Print when a check fails
     pub fn print_fail(&self, name: &str, duration_ms: u64, output: Option<&str>) {
         self.print_fail_indented(name, duration_ms, output, 0);
@@ -313,7 +331,7 @@ impl Ui {
     }
 }
 
-/// Create a running indicator that shows a blue circle and can be updated in-place
+/// Create a running indicator that shows a yellow circle and can be updated in-place
 pub fn create_running_indicator(name: &str, indent: usize) -> ProgressBar {
     let prefix = "    ".repeat(indent);
     let pb = ProgressBar::new_spinner();
@@ -492,9 +510,4 @@ pub fn finish_fail_with_metadata(
     if !metadata.is_empty() {
         print_metadata(metadata, prev_metadata, indent);
     }
-}
-
-/// Multi-progress for parallel execution
-pub fn create_multi_progress() -> MultiProgress {
-    MultiProgress::new()
 }

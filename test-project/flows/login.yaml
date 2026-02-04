@@ -1,0 +1,4 @@
+# Test flow: Login
+name: login
+steps:
+  - tap: "Login Button"

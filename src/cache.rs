@@ -204,6 +204,56 @@ impl CacheState {
         self.checks.get(check_name)
     }
 
+    /// Initialize or get mutable cache entry for per_file mode
+    pub fn get_or_create_mut(&mut self, check_name: &str) -> &mut CheckCache {
+        self.checks.entry(check_name.to_string()).or_insert_with(|| CheckCache {
+            last_result: CheckResult::Fail, // Will be updated on completion
+            last_run: Utc::now(),
+            duration_ms: 0,
+            content_hash: None,
+            file_hashes: BTreeMap::new(),
+            metadata: HashMap::new(),
+        })
+    }
+
+    /// Update cache for a single file in per_file mode
+    pub fn update_per_file_hash(
+        &mut self,
+        check_name: &str,
+        file_path: &str,
+        file_hash: FileHash,
+    ) {
+        let cache = self.get_or_create_mut(check_name);
+        cache.file_hashes.insert(file_path.to_string(), file_hash);
+    }
+
+    /// Mark per_file check as complete (all files passed)
+    pub fn finalize_per_file(
+        &mut self,
+        check_name: &str,
+        duration_ms: u64,
+        combined_hash: String,
+        file_hashes: BTreeMap<String, FileHash>,
+        metadata: HashMap<String, MetadataValue>,
+    ) {
+        let cache = self.get_or_create_mut(check_name);
+        cache.last_result = CheckResult::Pass;
+        cache.last_run = Utc::now();
+        cache.duration_ms = duration_ms;
+        cache.content_hash = Some(combined_hash);
+        cache.file_hashes = file_hashes;
+        cache.metadata = metadata;
+    }
+
+    /// Mark per_file check as failed
+    pub fn mark_per_file_failed(&mut self, check_name: &str, duration_ms: u64) {
+        let cache = self.get_or_create_mut(check_name);
+        cache.last_result = CheckResult::Fail;
+        cache.last_run = Utc::now();
+        cache.duration_ms = duration_ms;
+        // Keep existing file_hashes for partial progress
+    }
+
     /// Clear cache for specific checks or all
     pub fn clear(&mut self, names: &[String]) {
         if names.is_empty() {

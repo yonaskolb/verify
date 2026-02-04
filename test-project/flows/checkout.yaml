@@ -1,0 +1,4 @@
+# Test flow: Checkout
+name: checkout
+steps:
+  - tap: "Checkout Button"

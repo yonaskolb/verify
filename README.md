@@ -85,6 +85,7 @@ verifications:
 | `cache_paths` | No | Glob patterns for files that affect this check. If omitted, check always runs |
 | `depends_on` | No | List of checks or subprojects that must pass first |
 | `metadata` | No | Regex patterns for extracting metrics from output |
+| `per_file` | No | Run command once per stale file (sets `VERIFY_FILE` env var) |
 
 ### Subprojects
 
@@ -126,6 +127,30 @@ verifications:
 Captured values are stored in the cache and displayed in status output. Supports:
 - Simple patterns: Extract first capture group
 - Replacement patterns: `["(\\d+)/(\\d+)", "$1 of $2"]` for formatted output
+
+### Per-File Mode
+
+Run a command once for each stale file individually. Useful for test flows, slow operations, or checks that operate on single files:
+
+```yaml
+verifications:
+  - name: flow-tests
+    command: maestro test "$VERIFY_FILE"
+    cache_paths:
+      - "flows/**/*.yaml"
+    per_file: true
+```
+
+When `per_file: true`:
+- The command runs once per stale file with `VERIFY_FILE` environment variable set to the file path
+- Files that haven't changed are skipped (cached)
+- Progress shows each file as it runs:
+  ```
+  ● flow-tests (3 cached)
+  ● flow-tests: flows/login.yaml (2.1s)
+  ● flow-tests: flows/checkout.yaml (1.8s)
+  ```
+- If any file fails, execution stops and the error is reported
 
 ## Usage
 

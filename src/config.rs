@@ -75,6 +75,10 @@ pub struct Verification {
     /// Keys are metadata field names, values are regex patterns or [pattern, replacement] arrays
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, MetadataPattern>,
+
+    /// Run command once per stale file (sets VERIFY_FILE env var)
+    #[serde(default)]
+    pub per_file: bool,
 }
 
 impl Config {

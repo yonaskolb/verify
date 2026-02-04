@@ -34,3 +34,10 @@ verifications:
   # Always fails - for testing failure output
   - name: always-fails
     command: echo "This test always fails" && exit 1
+
+  # Per-file mode test
+  - name: flow-tests
+    command: echo "Running flow test for $VERIFY_FILE" && cat "$VERIFY_FILE"
+    cache_paths:
+      - "flows/**/*.yaml"
+    per_file: true
