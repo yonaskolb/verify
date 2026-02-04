@@ -663,10 +663,14 @@ fn execute_verification(
         );
     }
 
-    // Create running indicator (blue circle that updates in place)
-    let pb = if !json {
+    // In verbose mode, print start indicator instead of using progress bar
+    // (progress bar redraws interfere with streamed output)
+    let pb = if !json && !ui.is_verbose() {
         Some(create_running_indicator(&check.name, indent))
     } else {
+        if !json && ui.is_verbose() {
+            ui.print_running(&check.name, indent);
+        }
         None
     };
 
@@ -714,6 +718,9 @@ fn execute_verification(
                     prev_metadata.as_ref(),
                     indent,
                 );
+            } else if !json {
+                // Verbose mode: print completion line
+                ui.print_pass_indented(&check.name, duration_ms, indent);
             }
             results.add_pass(&check.name, duration_ms, false, &metadata, prev_metadata.as_ref(), prev_duration);
         }
@@ -728,9 +735,13 @@ fn execute_verification(
                     prev_metadata.as_ref(),
                     indent,
                 );
+            } else if !json {
+                // Verbose mode: print failure line
+                ui.print_fail_indented(&check.name, duration_ms, None, indent);
             }
             // Print error output separately (can't be part of progress bar)
-            if !json {
+            // In verbose mode, output was already streamed, so skip
+            if !json && !ui.is_verbose() {
                 ui.print_fail_output(Some(&output), indent);
             }
             results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref(), prev_duration);
@@ -789,9 +800,12 @@ fn execute_per_file(
     for file_path in &stale_files {
         // Create progress bar showing "check_name: file_path"
         let display_name = format!("{}: {}", check.name, file_path);
-        let file_pb = if !json {
+        let file_pb = if !json && !ui.is_verbose() {
             Some(create_running_indicator(&display_name, indent))
         } else {
+            if !json && ui.is_verbose() {
+                ui.print_running(&display_name, indent);
+            }
             None
         };
 
@@ -813,6 +827,9 @@ fn execute_per_file(
             if let Some(pb) = file_pb {
                 let empty = HashMap::new();
                 finish_pass_with_metadata(&pb, &display_name, file_duration_ms, &empty, None, indent);
+            } else if !json {
+                // Verbose mode: print completion line
+                ui.print_pass_indented(&display_name, file_duration_ms, indent);
             }
 
             // Update the file hash in cache (partial progress)
@@ -823,10 +840,13 @@ fn execute_per_file(
             // Finish file progress bar as failed
             if let Some(pb) = file_pb {
                 finish_fail_with_metadata(&pb, &display_name, &check.command, file_duration_ms, &HashMap::new(), None, indent);
+            } else if !json {
+                // Verbose mode: print failure line
+                ui.print_fail_indented(&display_name, file_duration_ms, None, indent);
             }
 
-            // Print failure output
-            if !json {
+            // Print failure output (in verbose mode, output was already streamed)
+            if !json && !ui.is_verbose() {
                 ui.print_fail_output(Some(&output), indent);
             }
 

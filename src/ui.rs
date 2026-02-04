@@ -329,6 +329,17 @@ impl Ui {
             );
         }
     }
+
+    /// Print when a check starts running (for verbose mode)
+    pub fn print_running(&self, name: &str, indent: usize) {
+        let prefix = Self::indent_str(indent);
+        println!(
+            "{}{} {}",
+            prefix,
+            style(ICON_CIRCLE).yellow().bold(),
+            style(name).bold()
+        );
+    }
 }
 
 /// Create a running indicator that shows a yellow circle and can be updated in-place
