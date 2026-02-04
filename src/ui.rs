@@ -259,17 +259,15 @@ impl Ui {
 
         if failed == 0 {
             println!(
-                "{}: {} passed {}",
-                style("Summary").bold(),
-                style(total_passed).green(),
+                "{} {}",
+                style(format!("{} verified", total_passed)).green(),
                 style(duration_str).dim()
             );
         } else {
             println!(
-                "{}: {} passed, {} failed {}",
-                style("Summary").bold(),
-                style(total_passed).green(),
-                style(failed).red(),
+                "{}, {} {}",
+                style(format!("{} verified", total_passed)).green(),
+                style(format!("{} failed", failed)).red(),
                 style(duration_str).dim()
             );
         }
