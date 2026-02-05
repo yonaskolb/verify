@@ -1,7 +1,7 @@
 use crate::cache::StalenessReason;
 use crate::metadata::{MetadataValue, compute_delta};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// JSON output for `verify status`
 #[derive(Debug, Serialize)]
@@ -161,8 +161,8 @@ impl CheckRunJson {
         name: &str,
         duration_ms: u64,
         cached: bool,
-        metadata: &HashMap<String, MetadataValue>,
-        prev_metadata: Option<&HashMap<String, MetadataValue>>,
+        metadata: &BTreeMap<String, MetadataValue>,
+        prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     ) -> Self {
         let (metadata_json, metadata_deltas) = convert_metadata(metadata, prev_metadata);
 
@@ -183,8 +183,8 @@ impl CheckRunJson {
         duration_ms: u64,
         exit_code: Option<i32>,
         output: Option<String>,
-        metadata: &HashMap<String, MetadataValue>,
-        prev_metadata: Option<&HashMap<String, MetadataValue>>,
+        metadata: &BTreeMap<String, MetadataValue>,
+        prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     ) -> Self {
         let (metadata_json, metadata_deltas) = convert_metadata(metadata, prev_metadata);
 
@@ -216,8 +216,8 @@ impl CheckRunJson {
 
 /// Convert metadata to JSON format and compute deltas
 fn convert_metadata(
-    metadata: &HashMap<String, MetadataValue>,
-    prev_metadata: Option<&HashMap<String, MetadataValue>>,
+    metadata: &BTreeMap<String, MetadataValue>,
+    prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
 ) -> (
     Option<HashMap<String, serde_json::Value>>,
     Option<HashMap<String, f64>>,
@@ -281,8 +281,8 @@ impl RunResults {
         name: &str,
         duration_ms: u64,
         cached: bool,
-        metadata: &HashMap<String, MetadataValue>,
-        prev_metadata: Option<&HashMap<String, MetadataValue>>,
+        metadata: &BTreeMap<String, MetadataValue>,
+        prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     ) {
         self.results.push(RunItemJson::Check(CheckRunJson::pass(
             name,
@@ -306,8 +306,8 @@ impl RunResults {
         duration_ms: u64,
         exit_code: Option<i32>,
         output: Option<String>,
-        metadata: &HashMap<String, MetadataValue>,
-        prev_metadata: Option<&HashMap<String, MetadataValue>>,
+        metadata: &BTreeMap<String, MetadataValue>,
+        prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     ) {
         self.results.push(RunItemJson::Check(CheckRunJson::fail(
             name,

@@ -3,7 +3,7 @@ use crate::metadata::{MetadataValue, compute_delta};
 use crate::output::format_duration;
 use console::{Term, style};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Circle icon used for all states (colored differently)
@@ -387,7 +387,7 @@ pub fn finish_pass(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize
 pub fn finish_cached(
     pb: &ProgressBar,
     name: &str,
-    metadata: &HashMap<String, MetadataValue>,
+    metadata: &BTreeMap<String, MetadataValue>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
@@ -441,8 +441,8 @@ fn format_delta(d: f64) -> String {
 
 /// Print metadata with deltas, indented
 fn print_metadata(
-    metadata: &HashMap<String, MetadataValue>,
-    prev: Option<&HashMap<String, MetadataValue>>,
+    metadata: &BTreeMap<String, MetadataValue>,
+    prev: Option<&BTreeMap<String, MetadataValue>>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
@@ -478,8 +478,8 @@ pub fn finish_pass_with_metadata(
     pb: &ProgressBar,
     name: &str,
     duration_ms: u64,
-    metadata: &HashMap<String, MetadataValue>,
-    prev_metadata: Option<&HashMap<String, MetadataValue>>,
+    metadata: &BTreeMap<String, MetadataValue>,
+    prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
@@ -509,8 +509,8 @@ pub fn finish_fail_with_metadata(
     name: &str,
     command: &str,
     duration_ms: u64,
-    metadata: &HashMap<String, MetadataValue>,
-    prev_metadata: Option<&HashMap<String, MetadataValue>>,
+    metadata: &BTreeMap<String, MetadataValue>,
+    prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);

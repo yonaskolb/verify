@@ -1,7 +1,7 @@
 use crate::metadata::MetadataValue;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::Path;
@@ -16,7 +16,7 @@ pub struct CacheState {
     pub version: u32,
 
     /// Cache entry for each verification check
-    pub checks: HashMap<String, CheckCache>,
+    pub checks: BTreeMap<String, CheckCache>,
 }
 
 /// Cache state for a single verification check
@@ -38,8 +38,8 @@ pub struct CheckCache {
     pub file_hashes: BTreeMap<String, String>,
 
     /// Extracted metadata values from last successful run
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub metadata: HashMap<String, MetadataValue>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, MetadataValue>,
 }
 
 /// Computed staleness status for a check
@@ -71,7 +71,7 @@ impl CacheState {
     pub fn new() -> Self {
         Self {
             version: CACHE_VERSION,
-            checks: HashMap::new(),
+            checks: BTreeMap::new(),
         }
     }
 
@@ -169,7 +169,7 @@ impl CacheState {
         config_hash: String,
         content_hash: Option<String>,
         file_hashes: BTreeMap<String, String>,
-        metadata: HashMap<String, MetadataValue>,
+        metadata: BTreeMap<String, MetadataValue>,
         per_file: bool,
     ) {
         let cache = if success {
@@ -198,7 +198,7 @@ impl CacheState {
                 } else {
                     BTreeMap::new()
                 },
-                metadata: HashMap::new(),
+                metadata: BTreeMap::new(),
             }
         };
         self.checks.insert(check_name.to_string(), cache);
@@ -217,7 +217,7 @@ impl CacheState {
                 config_hash: Some(config_hash.to_string()),
                 content_hash: None,
                 file_hashes: BTreeMap::new(),
-                metadata: HashMap::new(),
+                metadata: BTreeMap::new(),
             })
     }
 
@@ -240,7 +240,7 @@ impl CacheState {
         config_hash: &str,
         combined_hash: String,
         file_hashes: BTreeMap<String, String>,
-        metadata: HashMap<String, MetadataValue>,
+        metadata: BTreeMap<String, MetadataValue>,
     ) {
         let cache = self.get_or_create_mut(check_name, config_hash);
         cache.config_hash = Some(config_hash.to_string());
@@ -305,7 +305,7 @@ mod tests {
             "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -324,7 +324,7 @@ mod tests {
             "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -345,7 +345,7 @@ mod tests {
             "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -366,7 +366,7 @@ mod tests {
             "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -386,7 +386,7 @@ mod tests {
             "config1".to_string(),
             Some("hash1".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
         cache.update(
@@ -395,7 +395,7 @@ mod tests {
             "config2".to_string(),
             Some("hash2".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -419,7 +419,7 @@ mod tests {
             "config".to_string(),
             Some("hash".to_string()),
             file_hashes.clone(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
         assert!(cache.get("regular").unwrap().file_hashes.is_empty());
@@ -431,7 +431,7 @@ mod tests {
             "config".to_string(),
             Some("hash".to_string()),
             file_hashes,
-            HashMap::new(),
+            BTreeMap::new(),
             true,
         );
         assert!(!cache.get("perfile").unwrap().file_hashes.is_empty());

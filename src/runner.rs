@@ -11,7 +11,7 @@ use crate::ui::{
     finish_pass_with_metadata,
 };
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -596,7 +596,7 @@ fn execute_verification(
             finish_cached(
                 &pb,
                 &check.name,
-                cached_metadata.unwrap_or(&HashMap::new()),
+                cached_metadata.unwrap_or(&BTreeMap::new()),
                 indent,
             );
         }
@@ -653,7 +653,7 @@ fn execute_verification(
     let metadata = if success && !check.metadata.is_empty() {
         extract_metadata(&output, &check.metadata)
     } else {
-        HashMap::new()
+        BTreeMap::new()
     };
 
     // Update cache
@@ -740,7 +740,7 @@ fn execute_per_file(
     indent: usize,
     executed: &mut HashMap<String, bool>,
     results: &mut RunResults,
-    prev_metadata: Option<HashMap<String, MetadataValue>>,
+    prev_metadata: Option<BTreeMap<String, MetadataValue>>,
 ) -> Result<()> {
     let config_hash = check.config_hash();
 
@@ -810,7 +810,7 @@ fn execute_per_file(
         if success {
             // Finish file progress bar as passed
             if let Some(pb) = file_pb {
-                let empty = HashMap::new();
+                let empty = BTreeMap::new();
                 finish_pass_with_metadata(
                     &pb,
                     &display_name,
@@ -838,7 +838,7 @@ fn execute_per_file(
                     &display_name,
                     &check.command,
                     file_duration_ms,
-                    &HashMap::new(),
+                    &BTreeMap::new(),
                     None,
                     indent,
                 );
@@ -872,7 +872,7 @@ fn execute_per_file(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let empty_metadata = HashMap::new();
+        let empty_metadata = BTreeMap::new();
         results.add_fail(
             &check.name,
             total_duration_ms,
@@ -892,7 +892,7 @@ fn execute_per_file(
     let metadata = if !check.metadata.is_empty() {
         extract_metadata(&last_output, &check.metadata)
     } else {
-        HashMap::new()
+        BTreeMap::new()
     };
 
     // Finalize cache - all files passed
@@ -1226,7 +1226,7 @@ mod tests {
             config_hash,
             Some("hash123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -1253,7 +1253,7 @@ mod tests {
             config_hash,
             Some("old_hash".to_string()),
             old_file_hashes,
-            HashMap::new(),
+            BTreeMap::new(),
             true, // per_file to store file_hashes
         );
 
@@ -1286,7 +1286,7 @@ mod tests {
             "old_config_hash".to_string(),
             Some("hash123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -1317,7 +1317,7 @@ mod tests {
             config_hash,
             Some("hash123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -1381,7 +1381,7 @@ mod tests {
             config_hash,
             Some("old_combined".to_string()),
             old_hashes,
-            HashMap::new(),
+            BTreeMap::new(),
             true, // per_file to track file_hashes
         );
 
@@ -1418,7 +1418,7 @@ mod tests {
             config_hash,
             Some("hash123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 
@@ -1443,7 +1443,7 @@ mod tests {
             config_hash,
             Some("hash123".to_string()),
             BTreeMap::new(),
-            HashMap::new(),
+            BTreeMap::new(),
             false,
         );
 

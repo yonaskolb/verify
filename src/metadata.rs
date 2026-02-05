@@ -1,7 +1,7 @@
 use crate::config::MetadataPattern;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 /// A metadata value extracted from command output
@@ -27,8 +27,8 @@ impl fmt::Display for MetadataValue {
 pub fn extract_metadata(
     output: &str,
     patterns: &HashMap<String, MetadataPattern>,
-) -> HashMap<String, MetadataValue> {
-    let mut result = HashMap::new();
+) -> BTreeMap<String, MetadataValue> {
+    let mut result = BTreeMap::new();
 
     for (key, pattern) in patterns {
         if let Some(value) = apply_pattern(output, pattern) {
