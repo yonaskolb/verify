@@ -832,9 +832,11 @@ fn execute_per_file(
                 ui.print_pass_indented(&display_name, file_duration_ms, indent);
             }
 
-            // Update the file hash in cache (partial progress)
+            // Update the file hash in cache (partial progress) and save immediately
+            // so progress is preserved if process is interrupted
             if let Some(file_hash) = hash_result.file_hashes.get(file_path) {
                 cache.update_per_file_hash(&check.name, file_path, file_hash.clone());
+                cache.save(project_root)?;
             }
         } else {
             // Finish file progress bar as failed
