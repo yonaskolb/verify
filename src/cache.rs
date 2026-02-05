@@ -1,4 +1,3 @@
-use crate::hasher::FileHash;
 use crate::metadata::MetadataValue;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::Path;
 
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 const LOCK_FILE: &str = "verify.lock";
 
 /// Root cache structure stored in verify.lock
@@ -34,8 +33,9 @@ pub struct CheckCache {
     pub content_hash: Option<String>,
 
     /// Individual file hashes - only stored for per_file checks to track partial progress
+    /// Maps file path to content hash
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_hashes: BTreeMap<String, FileHash>,
+    pub file_hashes: BTreeMap<String, String>,
 
     /// Extracted metadata values from last successful run
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -169,7 +169,7 @@ impl CacheState {
         success: bool,
         config_hash: String,
         content_hash: Option<String>,
-        file_hashes: BTreeMap<String, FileHash>,
+        file_hashes: BTreeMap<String, String>,
         metadata: HashMap<String, MetadataValue>,
         per_file: bool,
     ) {
@@ -222,7 +222,7 @@ impl CacheState {
         check_name: &str,
         config_hash: &str,
         file_path: &str,
-        file_hash: FileHash,
+        file_hash: String,
     ) {
         let cache = self.get_or_create_mut(check_name, config_hash);
         cache.file_hashes.insert(file_path.to_string(), file_hash);
@@ -234,7 +234,7 @@ impl CacheState {
         check_name: &str,
         config_hash: &str,
         combined_hash: String,
-        file_hashes: BTreeMap<String, FileHash>,
+        file_hashes: BTreeMap<String, String>,
         metadata: HashMap<String, MetadataValue>,
     ) {
         let cache = self.get_or_create_mut(check_name, config_hash);
@@ -404,13 +404,7 @@ mod tests {
     fn test_file_hashes_only_stored_for_per_file() {
         let mut cache = CacheState::new();
         let mut file_hashes = BTreeMap::new();
-        file_hashes.insert(
-            "test.rs".to_string(),
-            FileHash {
-                hash: "abc".to_string(),
-                size: 100,
-            },
-        );
+        file_hashes.insert("test.rs".to_string(), "abc".to_string());
 
         // Regular check - file_hashes should NOT be stored
         cache.update(

@@ -165,7 +165,7 @@ fn compute_staleness(
 /// Get list of stale files by comparing cached vs current file hashes directly.
 /// Used in per_file mode to preserve progress even when overall check failed.
 fn get_stale_files_from_cache(
-    cached_file_hashes: &std::collections::BTreeMap<String, crate::hasher::FileHash>,
+    cached_file_hashes: &std::collections::BTreeMap<String, String>,
     current_hashes: &HashResult,
 ) -> Vec<String> {
     current_hashes
@@ -175,7 +175,7 @@ fn get_stale_files_from_cache(
             // File is stale if not in cache or hash changed
             match cached_file_hashes.get(*path) {
                 None => true,
-                Some(cached) => cached.hash != current_hash.hash,
+                Some(cached) => cached != *current_hash,
             }
         })
         .map(|(path, _)| path.clone())
@@ -932,27 +932,15 @@ fn run_checks_subproject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hasher::FileHash;
+    use crate::hasher::HashResult;
     use std::collections::BTreeMap;
 
     #[test]
     fn test_get_stale_files_from_cache_all_new() {
-        let cached: BTreeMap<String, FileHash> = BTreeMap::new();
+        let cached: BTreeMap<String, String> = BTreeMap::new();
         let mut current_hashes = BTreeMap::new();
-        current_hashes.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "abc123".to_string(),
-                size: 100,
-            },
-        );
-        current_hashes.insert(
-            "file2.txt".to_string(),
-            FileHash {
-                hash: "def456".to_string(),
-                size: 200,
-            },
-        );
+        current_hashes.insert("file1.txt".to_string(), "abc123".to_string());
+        current_hashes.insert("file2.txt".to_string(), "def456".to_string());
 
         let hash_result = HashResult {
             combined_hash: "combined".to_string(),
@@ -967,23 +955,11 @@ mod tests {
 
     #[test]
     fn test_get_stale_files_from_cache_all_fresh() {
-        let mut cached: BTreeMap<String, FileHash> = BTreeMap::new();
-        cached.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "abc123".to_string(),
-                size: 100,
-            },
-        );
+        let mut cached: BTreeMap<String, String> = BTreeMap::new();
+        cached.insert("file1.txt".to_string(), "abc123".to_string());
 
         let mut current_hashes = BTreeMap::new();
-        current_hashes.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "abc123".to_string(),
-                size: 100,
-            },
-        );
+        current_hashes.insert("file1.txt".to_string(), "abc123".to_string());
 
         let hash_result = HashResult {
             combined_hash: "combined".to_string(),
@@ -997,30 +973,12 @@ mod tests {
     #[test]
     fn test_get_stale_files_from_cache_partial_progress() {
         // Simulates: file1 passed (in cache), file2 failed (not in cache)
-        let mut cached: BTreeMap<String, FileHash> = BTreeMap::new();
-        cached.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "abc123".to_string(),
-                size: 100,
-            },
-        );
+        let mut cached: BTreeMap<String, String> = BTreeMap::new();
+        cached.insert("file1.txt".to_string(), "abc123".to_string());
 
         let mut current_hashes = BTreeMap::new();
-        current_hashes.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "abc123".to_string(),
-                size: 100,
-            },
-        );
-        current_hashes.insert(
-            "file2.txt".to_string(),
-            FileHash {
-                hash: "def456".to_string(),
-                size: 200,
-            },
-        );
+        current_hashes.insert("file1.txt".to_string(), "abc123".to_string());
+        current_hashes.insert("file2.txt".to_string(), "def456".to_string());
 
         let hash_result = HashResult {
             combined_hash: "combined".to_string(),
@@ -1034,23 +992,11 @@ mod tests {
 
     #[test]
     fn test_get_stale_files_from_cache_hash_changed() {
-        let mut cached: BTreeMap<String, FileHash> = BTreeMap::new();
-        cached.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "old_hash".to_string(),
-                size: 100,
-            },
-        );
+        let mut cached: BTreeMap<String, String> = BTreeMap::new();
+        cached.insert("file1.txt".to_string(), "old_hash".to_string());
 
         let mut current_hashes = BTreeMap::new();
-        current_hashes.insert(
-            "file1.txt".to_string(),
-            FileHash {
-                hash: "new_hash".to_string(),
-                size: 100,
-            },
-        );
+        current_hashes.insert("file1.txt".to_string(), "new_hash".to_string());
 
         let hash_result = HashResult {
             combined_hash: "combined".to_string(),
