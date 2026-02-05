@@ -28,8 +28,13 @@ cargo install --git https://github.com/yonaskolb/verify
 Or clone and build:
 
 ```bash
+git clone https://github.com/yonaskolb/verify
+cd verify
 cargo build --release
 # Binary at ./target/release/verify
+
+# Or install to ~/.cargo/bin
+cargo install --path .
 ```
 
 ## Quick Start
