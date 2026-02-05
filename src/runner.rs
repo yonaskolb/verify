@@ -138,8 +138,9 @@ fn compute_staleness(
         };
     }
 
-    // Then check file changes
-    let status = cache.check_staleness(&check.name, &hash_result.combined_hash);
+    // Then check file changes and config changes
+    let config_hash = check.config_hash();
+    let status = cache.check_staleness(&check.name, &hash_result.combined_hash, &config_hash);
 
     // Enrich with changed files if stale due to files
     match &status {
@@ -659,12 +660,15 @@ fn execute_verification(
     };
 
     // Update cache
+    let config_hash = check.config_hash();
     cache.update(
         &check.name,
         success,
+        config_hash,
         Some(hash_result.combined_hash.clone()),
         hash_result.file_hashes,
         metadata.clone(),
+        check.per_file,
     );
 
     // Record result
@@ -728,14 +732,24 @@ fn execute_per_file(
     results: &mut RunResults,
     prev_metadata: Option<HashMap<String, MetadataValue>>,
 ) -> Result<()> {
+    let config_hash = check.config_hash();
+
     // For per_file mode, compute stale files by comparing cached vs current file hashes.
     // This preserves progress when overall check failed - only re-run files that
     // haven't passed yet (or whose content changed).
-    let cached_file_hashes = cache
-        .get(&check.name)
-        .map(|c| &c.file_hashes)
-        .cloned()
-        .unwrap_or_default();
+    // Also invalidate all progress if config changed.
+    let cached = cache.get(&check.name);
+    let config_changed = cached
+        .and_then(|c| c.config_hash.as_ref())
+        .map(|h| h != &config_hash)
+        .unwrap_or(true);
+
+    let cached_file_hashes = if config_changed {
+        // Config changed, invalidate all file hashes
+        std::collections::BTreeMap::new()
+    } else {
+        cached.map(|c| &c.file_hashes).cloned().unwrap_or_default()
+    };
     let stale_files = get_stale_files_from_cache(&cached_file_hashes, hash_result);
     let total_files = hash_result.file_hashes.len();
     let fresh_count = total_files.saturating_sub(stale_files.len());
@@ -795,7 +809,7 @@ fn execute_per_file(
             // Update the file hash in cache (partial progress) and save immediately
             // so progress is preserved if process is interrupted
             if let Some(file_hash) = hash_result.file_hashes.get(file_path) {
-                cache.update_per_file_hash(&check.name, file_path, file_hash.clone());
+                cache.update_per_file_hash(&check.name, &config_hash, file_path, file_hash.clone());
                 cache.save(project_root)?;
             }
         } else {
@@ -814,7 +828,7 @@ fn execute_per_file(
 
             // Mark check as failed and stop
             let total_duration_ms = start.elapsed().as_millis() as u64;
-            cache.mark_per_file_failed(&check.name);
+            cache.mark_per_file_failed(&check.name, &config_hash);
             executed.insert(check.name.clone(), true);
 
             let empty_metadata = HashMap::new();
@@ -847,6 +861,7 @@ fn execute_per_file(
     let total_duration_ms = start.elapsed().as_millis() as u64;
     cache.finalize_per_file(
         &check.name,
+        &config_hash,
         hash_result.combined_hash.clone(),
         hash_result.file_hashes.clone(),
         metadata.clone(),

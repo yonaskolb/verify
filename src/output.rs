@@ -69,6 +69,7 @@ impl CheckStatusJson {
             StalenessReason::DependencyStale { dependency } => {
                 (Some("dependency_stale".to_string()), Some(dependency.clone()), None)
             }
+            StalenessReason::ConfigChanged => (Some("config_changed".to_string()), None, None),
             StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
         };
 

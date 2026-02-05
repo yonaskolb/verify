@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::Path;
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const LOCK_FILE: &str = "verify.lock";
 
 /// Root cache structure stored in verify.lock
@@ -23,12 +23,17 @@ pub struct CacheState {
 /// Cache state for a single verification check
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CheckCache {
+    /// Hash of the check's configuration (command, cache_paths, etc.)
+    /// Used to detect when the check definition changes in verify.yaml
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+
     /// Hash of all files matching cache_paths at time of last successful run
     /// None means the check needs to run (never passed or last run failed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
 
-    /// Individual file hashes for debugging/transparency and per_file partial progress
+    /// Individual file hashes - only stored for per_file checks to track partial progress
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_hashes: BTreeMap<String, FileHash>,
 
@@ -55,6 +60,8 @@ pub enum StalenessReason {
     FilesChanged { changed_files: Vec<String> },
     /// A dependency is stale
     DependencyStale { dependency: String },
+    /// The check definition changed in verify.yaml
+    ConfigChanged,
     /// No cache_paths defined - always run
     NoCachePaths,
 }
@@ -113,15 +120,33 @@ impl CacheState {
         Ok(())
     }
 
-    /// Determine if a check is stale based on current hash
-    pub fn check_staleness(&self, check_name: &str, current_hash: &str) -> StalenessStatus {
+    /// Determine if a check is stale based on current content hash and config hash
+    pub fn check_staleness(
+        &self,
+        check_name: &str,
+        current_content_hash: &str,
+        current_config_hash: &str,
+    ) -> StalenessStatus {
         match self.checks.get(check_name) {
             None => StalenessStatus::NeverRun,
             Some(cache) => {
+                // Check config hash first - if config changed, check is stale
+                match &cache.config_hash {
+                    None => return StalenessStatus::NeverRun,
+                    Some(stored_config_hash) => {
+                        if stored_config_hash != current_config_hash {
+                            return StalenessStatus::Stale {
+                                reason: StalenessReason::ConfigChanged,
+                            };
+                        }
+                    }
+                }
+
+                // Then check content hash
                 match &cache.content_hash {
                     None => StalenessStatus::NeverRun,
                     Some(stored_hash) => {
-                        if stored_hash == current_hash {
+                        if stored_hash == current_content_hash {
                             StalenessStatus::Fresh
                         } else {
                             StalenessStatus::Stale {
@@ -136,31 +161,40 @@ impl CacheState {
         }
     }
 
-    /// Update cache after running a check
+    /// Update cache after running a check.
+    /// Only stores file_hashes for per_file checks to keep lock file small.
     pub fn update(
         &mut self,
         check_name: &str,
         success: bool,
+        config_hash: String,
         content_hash: Option<String>,
         file_hashes: BTreeMap<String, FileHash>,
         metadata: HashMap<String, MetadataValue>,
+        per_file: bool,
     ) {
         let cache = if success {
             CheckCache {
+                config_hash: Some(config_hash),
                 content_hash,
-                file_hashes,
+                // Only store file_hashes for per_file checks
+                file_hashes: if per_file { file_hashes } else { BTreeMap::new() },
                 metadata,
             }
         } else {
             // On failure, clear content_hash (will trigger re-run)
             // but keep file_hashes for per_file partial progress
             CheckCache {
+                config_hash: Some(config_hash),
                 content_hash: None,
-                file_hashes: self
-                    .checks
-                    .get(check_name)
-                    .map(|c| c.file_hashes.clone())
-                    .unwrap_or_default(),
+                file_hashes: if per_file {
+                    self.checks
+                        .get(check_name)
+                        .map(|c| c.file_hashes.clone())
+                        .unwrap_or_default()
+                } else {
+                    BTreeMap::new()
+                },
                 metadata: HashMap::new(),
             }
         };
@@ -173,8 +207,9 @@ impl CacheState {
     }
 
     /// Initialize or get mutable cache entry for per_file mode
-    pub fn get_or_create_mut(&mut self, check_name: &str) -> &mut CheckCache {
+    pub fn get_or_create_mut(&mut self, check_name: &str, config_hash: &str) -> &mut CheckCache {
         self.checks.entry(check_name.to_string()).or_insert_with(|| CheckCache {
+            config_hash: Some(config_hash.to_string()),
             content_hash: None,
             file_hashes: BTreeMap::new(),
             metadata: HashMap::new(),
@@ -185,10 +220,11 @@ impl CacheState {
     pub fn update_per_file_hash(
         &mut self,
         check_name: &str,
+        config_hash: &str,
         file_path: &str,
         file_hash: FileHash,
     ) {
-        let cache = self.get_or_create_mut(check_name);
+        let cache = self.get_or_create_mut(check_name, config_hash);
         cache.file_hashes.insert(file_path.to_string(), file_hash);
     }
 
@@ -196,19 +232,22 @@ impl CacheState {
     pub fn finalize_per_file(
         &mut self,
         check_name: &str,
+        config_hash: &str,
         combined_hash: String,
         file_hashes: BTreeMap<String, FileHash>,
         metadata: HashMap<String, MetadataValue>,
     ) {
-        let cache = self.get_or_create_mut(check_name);
+        let cache = self.get_or_create_mut(check_name, config_hash);
+        cache.config_hash = Some(config_hash.to_string());
         cache.content_hash = Some(combined_hash);
         cache.file_hashes = file_hashes;
         cache.metadata = metadata;
     }
 
     /// Mark per_file check as failed (keeps partial file_hashes for progress)
-    pub fn mark_per_file_failed(&mut self, check_name: &str) {
-        let cache = self.get_or_create_mut(check_name);
+    pub fn mark_per_file_failed(&mut self, check_name: &str, config_hash: &str) {
+        let cache = self.get_or_create_mut(check_name, config_hash);
+        cache.config_hash = Some(config_hash.to_string());
         cache.content_hash = None;
         // Keep existing file_hashes for partial progress
     }
@@ -246,7 +285,7 @@ mod tests {
     fn test_staleness_never_run() {
         let cache = CacheState::new();
         assert_eq!(
-            cache.check_staleness("test", "somehash"),
+            cache.check_staleness("test", "somehash", "confighash"),
             StalenessStatus::NeverRun
         );
     }
@@ -257,42 +296,77 @@ mod tests {
         cache.update(
             "test",
             true,
+            "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
             HashMap::new(),
+            false,
         );
 
         assert_eq!(
-            cache.check_staleness("test", "abc123"),
+            cache.check_staleness("test", "abc123", "confighash"),
             StalenessStatus::Fresh
         );
     }
 
     #[test]
-    fn test_staleness_after_change() {
+    fn test_staleness_after_content_change() {
         let mut cache = CacheState::new();
         cache.update(
             "test",
             true,
+            "confighash".to_string(),
             Some("abc123".to_string()),
             BTreeMap::new(),
             HashMap::new(),
+            false,
         );
 
-        match cache.check_staleness("test", "different_hash") {
-            StalenessStatus::Stale { .. } => {}
-            other => panic!("Expected Stale, got {:?}", other),
+        match cache.check_staleness("test", "different_hash", "confighash") {
+            StalenessStatus::Stale {
+                reason: StalenessReason::FilesChanged { .. },
+            } => {}
+            other => panic!("Expected Stale(FilesChanged), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_staleness_after_config_change() {
+        let mut cache = CacheState::new();
+        cache.update(
+            "test",
+            true,
+            "confighash".to_string(),
+            Some("abc123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        match cache.check_staleness("test", "abc123", "different_config") {
+            StalenessStatus::Stale {
+                reason: StalenessReason::ConfigChanged,
+            } => {}
+            other => panic!("Expected Stale(ConfigChanged), got {:?}", other),
         }
     }
 
     #[test]
     fn test_staleness_after_failure() {
         let mut cache = CacheState::new();
-        cache.update("test", false, Some("abc123".to_string()), BTreeMap::new(), HashMap::new());
+        cache.update(
+            "test",
+            false,
+            "confighash".to_string(),
+            Some("abc123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
 
         // After failure, content_hash is cleared, so it should be NeverRun
         assert_eq!(
-            cache.check_staleness("test", "anyhash"),
+            cache.check_staleness("test", "anyhash", "confighash"),
             StalenessStatus::NeverRun
         );
     }
@@ -300,13 +374,66 @@ mod tests {
     #[test]
     fn test_cleanup_orphaned() {
         let mut cache = CacheState::new();
-        cache.update("keep", true, Some("hash1".to_string()), BTreeMap::new(), HashMap::new());
-        cache.update("remove", true, Some("hash2".to_string()), BTreeMap::new(), HashMap::new());
+        cache.update(
+            "keep",
+            true,
+            "config1".to_string(),
+            Some("hash1".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+        cache.update(
+            "remove",
+            true,
+            "config2".to_string(),
+            Some("hash2".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
 
         let valid: HashSet<String> = vec!["keep".to_string()].into_iter().collect();
         cache.cleanup_orphaned(&valid);
 
         assert!(cache.get("keep").is_some());
         assert!(cache.get("remove").is_none());
+    }
+
+    #[test]
+    fn test_file_hashes_only_stored_for_per_file() {
+        let mut cache = CacheState::new();
+        let mut file_hashes = BTreeMap::new();
+        file_hashes.insert(
+            "test.rs".to_string(),
+            FileHash {
+                hash: "abc".to_string(),
+                size: 100,
+            },
+        );
+
+        // Regular check - file_hashes should NOT be stored
+        cache.update(
+            "regular",
+            true,
+            "config".to_string(),
+            Some("hash".to_string()),
+            file_hashes.clone(),
+            HashMap::new(),
+            false,
+        );
+        assert!(cache.get("regular").unwrap().file_hashes.is_empty());
+
+        // per_file check - file_hashes SHOULD be stored
+        cache.update(
+            "perfile",
+            true,
+            "config".to_string(),
+            Some("hash".to_string()),
+            file_hashes,
+            HashMap::new(),
+            true,
+        );
+        assert!(!cache.get("perfile").unwrap().file_hashes.is_empty());
     }
 }

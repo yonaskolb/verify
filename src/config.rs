@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -79,6 +80,63 @@ pub struct Verification {
     /// Run command once per stale file (sets VERIFY_FILE env var)
     #[serde(default)]
     pub per_file: bool,
+}
+
+impl Verification {
+    /// Compute a deterministic hash of this check's configuration.
+    /// Used to detect when the check definition changes in verify.yaml.
+    pub fn config_hash(&self) -> String {
+        let mut hasher = Hasher::new();
+
+        // Hash command
+        hasher.update(b"command:");
+        hasher.update(self.command.as_bytes());
+        hasher.update(b"\n");
+
+        // Hash cache_paths (sorted for determinism)
+        hasher.update(b"cache_paths:");
+        let mut sorted_paths = self.cache_paths.clone();
+        sorted_paths.sort();
+        for path in &sorted_paths {
+            hasher.update(path.as_bytes());
+            hasher.update(b",");
+        }
+        hasher.update(b"\n");
+
+        // Hash timeout
+        hasher.update(b"timeout:");
+        if let Some(timeout) = self.timeout_secs {
+            hasher.update(timeout.to_string().as_bytes());
+        }
+        hasher.update(b"\n");
+
+        // Hash per_file flag
+        hasher.update(b"per_file:");
+        hasher.update(if self.per_file { b"true" } else { b"false" });
+        hasher.update(b"\n");
+
+        // Hash metadata patterns (sorted keys for determinism)
+        hasher.update(b"metadata:");
+        let mut sorted_keys: Vec<_> = self.metadata.keys().collect();
+        sorted_keys.sort();
+        for key in sorted_keys {
+            hasher.update(key.as_bytes());
+            hasher.update(b"=");
+            match &self.metadata[key] {
+                MetadataPattern::Simple(pattern) => {
+                    hasher.update(pattern.as_bytes());
+                }
+                MetadataPattern::WithReplacement(pattern, replacement) => {
+                    hasher.update(pattern.as_bytes());
+                    hasher.update(b"|");
+                    hasher.update(replacement.as_bytes());
+                }
+            }
+            hasher.update(b",");
+        }
+
+        hasher.finalize().to_hex().to_string()
+    }
 }
 
 impl Config {

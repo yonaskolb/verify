@@ -82,6 +82,7 @@ impl Ui {
             StalenessReason::DependencyStale { dependency } => {
                 format!("depends on: {}", dependency)
             }
+            StalenessReason::ConfigChanged => "config changed".to_string(),
             StalenessReason::NoCachePaths => "no cache paths".to_string(),
         };
 
