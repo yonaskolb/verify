@@ -1,14 +1,14 @@
 use crate::cache::{CacheState, StalenessReason, StalenessStatus};
 use crate::config::{Config, Subproject, Verification, VerificationItem};
 use crate::graph::DependencyGraph;
-use crate::hasher::{compute_check_hash, find_changed_files, HashResult};
-use crate::metadata::{extract_metadata, MetadataValue};
+use crate::hasher::{HashResult, compute_check_hash, find_changed_files};
+use crate::metadata::{MetadataValue, extract_metadata};
 use crate::output::{
     CheckStatusJson, RunResults, StatusItemJson, StatusOutput, SubprojectStatusJson,
 };
 use crate::ui::{
-    create_running_indicator, finish_cached, finish_fail_with_metadata,
-    finish_pass_with_metadata, Ui,
+    Ui, create_running_indicator, finish_cached, finish_fail_with_metadata,
+    finish_pass_with_metadata,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -49,8 +49,7 @@ fn execute_command(
         for (key, value) in env_vars {
             cmd.env(key, value);
         }
-        let mut child = match cmd.spawn()
-        {
+        let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => return (false, None, format!("Failed to execute command: {}", e)),
         };
@@ -89,9 +88,7 @@ fn execute_command(
     } else {
         // Original behavior: capture all output at once
         let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(project_root);
+        cmd.arg("-c").arg(command).current_dir(project_root);
         for (key, value) in env_vars {
             cmd.env(key, value);
         }
@@ -280,8 +277,7 @@ fn run_status_recursive(
                 }
             }
             VerificationItem::Subproject(s) => {
-                let sub_items =
-                    run_status_subproject(project_root, s, ui, json, indent)?;
+                let sub_items = run_status_subproject(project_root, s, ui, json, indent)?;
 
                 if json {
                     status_items.push(StatusItemJson::Subproject(SubprojectStatusJson::new(
@@ -319,7 +315,14 @@ fn run_status_subproject(
     }
 
     // Recursively process subproject
-    run_status_recursive(&subproject_dir, &sub_config, &sub_cache, ui, json, indent + 1)
+    run_status_recursive(
+        &subproject_dir,
+        &sub_config,
+        &sub_cache,
+        ui,
+        json,
+        indent + 1,
+    )
 }
 
 /// Check if a config has any stale checks
@@ -390,15 +393,16 @@ pub fn run_checks(
         let output = final_results.to_output();
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        ui.print_summary(final_results.passed, final_results.failed, final_results.skipped, total_duration_ms);
+        ui.print_summary(
+            final_results.passed,
+            final_results.failed,
+            final_results.skipped,
+            total_duration_ms,
+        );
     }
 
     // Return exit code
-    if failed_count > 0 {
-        Ok(1)
-    } else {
-        Ok(0)
-    }
+    if failed_count > 0 { Ok(1) } else { Ok(0) }
 }
 
 /// Recursively run checks for config and all subprojects
@@ -470,15 +474,8 @@ fn execute_item_with_deps(
             if let Some(sub) = config.get_subproject(dep_name) {
                 // Execute subproject if not already done (run all checks in the subproject)
                 if !executed.contains_key(dep_name) {
-                    let sub_results = run_checks_subproject(
-                        project_root,
-                        sub,
-                        &[],
-                        force,
-                        json,
-                        ui,
-                        indent,
-                    )?;
+                    let sub_results =
+                        run_checks_subproject(project_root, sub, &[], force, json, ui, indent)?;
                     let had_failures = sub_results.failed > 0;
                     executed.insert(dep_name.clone(), had_failures);
                     results.add_subproject(
@@ -531,22 +528,11 @@ fn execute_item_with_deps(
                 return Ok(());
             }
             if !executed.contains_key(&s.name) {
-                let sub_results = run_checks_subproject(
-                    project_root,
-                    s,
-                    names,
-                    force,
-                    json,
-                    ui,
-                    indent,
-                )?;
+                let sub_results =
+                    run_checks_subproject(project_root, s, names, force, json, ui, indent)?;
                 let had_failures = sub_results.failed > 0;
                 executed.insert(s.name.clone(), had_failures);
-                results.add_subproject(
-                    &s.name,
-                    s.path.to_string_lossy().as_ref(),
-                    sub_results,
-                );
+                results.add_subproject(&s.name, s.path.to_string_lossy().as_ref(), sub_results);
             }
         }
     }
@@ -572,23 +558,24 @@ fn execute_verification(
     }
 
     // Check if any dependency failed
-    let dep_failed = check.depends_on.iter().any(|dep| {
-        executed.get(dep).copied().unwrap_or(false)
-    });
+    let dep_failed = check
+        .depends_on
+        .iter()
+        .any(|dep| executed.get(dep).copied().unwrap_or(false));
 
     // Compute staleness
     let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
 
     // Build staleness map from executed checks
-    let dep_staleness: HashMap<String, bool> = executed
-        .iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
+    let dep_staleness: HashMap<String, bool> =
+        executed.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
     let staleness = if dep_failed {
         StalenessStatus::Stale {
             reason: StalenessReason::DependencyStale {
-                dependency: check.depends_on.iter()
+                dependency: check
+                    .depends_on
+                    .iter()
                     .find(|d| executed.get(*d).copied().unwrap_or(false))
                     .unwrap_or(&check.depends_on[0])
                     .clone(),
@@ -606,7 +593,12 @@ fn execute_verification(
         if !json {
             let pb = create_running_indicator(&check.name, indent);
             let cached_metadata = cached.map(|c| &c.metadata);
-            finish_cached(&pb, &check.name, cached_metadata.unwrap_or(&HashMap::new()), indent);
+            finish_cached(
+                &pb,
+                &check.name,
+                cached_metadata.unwrap_or(&HashMap::new()),
+                indent,
+            );
         }
         results.add_skipped(&check.name);
         executed.insert(check.name.clone(), false);
@@ -647,8 +639,13 @@ fn execute_verification(
 
     // Execute the check
     let start = Instant::now();
-    let (success, exit_code, output) =
-        execute_command(&check.command, project_root, check.timeout_secs, ui.is_verbose(), &[]);
+    let (success, exit_code, output) = execute_command(
+        &check.command,
+        project_root,
+        check.timeout_secs,
+        ui.is_verbose(),
+        &[],
+    );
     let duration = start.elapsed();
     let duration_ms = duration.as_millis() as u64;
 
@@ -688,7 +685,13 @@ fn execute_verification(
             // Verbose mode: print completion line
             ui.print_pass_indented(&check.name, duration_ms, indent);
         }
-        results.add_pass(&check.name, duration_ms, false, &metadata, prev_metadata.as_ref());
+        results.add_pass(
+            &check.name,
+            duration_ms,
+            false,
+            &metadata,
+            prev_metadata.as_ref(),
+        );
     } else {
         if let Some(pb) = pb {
             finish_fail_with_metadata(
@@ -709,7 +712,14 @@ fn execute_verification(
         if !json && !ui.is_verbose() {
             ui.print_fail_output(Some(&output), indent);
         }
-        results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref());
+        results.add_fail(
+            &check.name,
+            duration_ms,
+            exit_code,
+            Some(output),
+            &metadata,
+            prev_metadata.as_ref(),
+        );
     }
 
     // Save cache immediately after check completes
@@ -801,7 +811,14 @@ fn execute_per_file(
             // Finish file progress bar as passed
             if let Some(pb) = file_pb {
                 let empty = HashMap::new();
-                finish_pass_with_metadata(&pb, &display_name, file_duration_ms, &empty, None, indent);
+                finish_pass_with_metadata(
+                    &pb,
+                    &display_name,
+                    file_duration_ms,
+                    &empty,
+                    None,
+                    indent,
+                );
             } else if !json {
                 // Verbose mode: print completion line
                 ui.print_pass_indented(&display_name, file_duration_ms, indent);
@@ -816,7 +833,15 @@ fn execute_per_file(
         } else {
             // Finish file progress bar as failed
             if let Some(pb) = file_pb {
-                finish_fail_with_metadata(&pb, &display_name, &check.command, file_duration_ms, &HashMap::new(), None, indent);
+                finish_fail_with_metadata(
+                    &pb,
+                    &display_name,
+                    &check.command,
+                    file_duration_ms,
+                    &HashMap::new(),
+                    None,
+                    indent,
+                );
             } else if !json {
                 // Verbose mode: print failure line
                 ui.print_fail_indented(&display_name, file_duration_ms, None, indent);
@@ -949,7 +974,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     // Helper to create a basic Verification for testing
-    fn make_verification(name: &str, cache_paths: Vec<&str>, depends_on: Vec<&str>) -> Verification {
+    fn make_verification(
+        name: &str,
+        cache_paths: Vec<&str>,
+        depends_on: Vec<&str>,
+    ) -> Verification {
         Verification {
             name: name.to_string(),
             command: "echo test".to_string(),
@@ -1577,8 +1606,7 @@ mod tests {
     #[test]
     fn test_execute_command_empty_output() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let (success, _, output) =
-            execute_command("true", temp_dir.path(), None, false, &[]);
+        let (success, _, output) = execute_command("true", temp_dir.path(), None, false, &[]);
 
         assert!(success);
         assert!(output.is_empty() || output.trim().is_empty());
@@ -1618,8 +1646,13 @@ mod tests {
     #[test]
     fn test_execute_command_command_not_found() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let (success, exit_code, _output) =
-            execute_command("nonexistent_command_12345", temp_dir.path(), None, false, &[]);
+        let (success, exit_code, _output) = execute_command(
+            "nonexistent_command_12345",
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
 
         assert!(!success);
         // Exit code 127 typically means command not found
@@ -1643,8 +1676,13 @@ mod tests {
     fn test_execute_command_writes_file_in_workdir() {
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let (success, _, _output) =
-            execute_command("echo 'written content' > output.txt", temp_dir.path(), None, false, &[]);
+        let (success, _, _output) = execute_command(
+            "echo 'written content' > output.txt",
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
 
         assert!(success);
 

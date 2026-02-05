@@ -1,6 +1,5 @@
 /// Per-file mode integration tests
 /// Tests for the per_file: true feature that runs commands once per file
-
 mod common;
 
 use common::TestProject;
@@ -559,10 +558,7 @@ fn test_per_file_json_output() {
     assert!(success);
 
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("Should be valid JSON");
-    assert!(
-        json["results"].is_array(),
-        "JSON should have results array"
-    );
+    assert!(json["results"].is_array(), "JSON should have results array");
 }
 
 // ==================== All Fresh Scenario ====================

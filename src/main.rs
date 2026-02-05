@@ -32,7 +32,13 @@ fn run() -> Result<i32> {
     let config_path = &cli.config;
     let project_root = config_path
         .parent()
-        .map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p })
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                p
+            }
+        })
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
@@ -58,7 +64,11 @@ fn run() -> Result<i32> {
             Ok(0)
         }
 
-        Commands::Run { names, force, stage } => {
+        Commands::Run {
+            names,
+            force,
+            stage,
+        } => {
             let config = config::Config::load(config_path)?;
             let mut cache = cache::CacheState::load(&project_root)?;
 

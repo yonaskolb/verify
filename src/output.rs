@@ -1,5 +1,5 @@
 use crate::cache::StalenessReason;
-use crate::metadata::{compute_delta, MetadataValue};
+use crate::metadata::{MetadataValue, compute_delta};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -61,14 +61,22 @@ impl CheckStatusJson {
         }
     }
 
-    pub fn stale(name: &str, reason: &StalenessReason, _cache: Option<&crate::cache::CheckCache>) -> Self {
+    pub fn stale(
+        name: &str,
+        reason: &StalenessReason,
+        _cache: Option<&crate::cache::CheckCache>,
+    ) -> Self {
         let (reason_str, stale_dep, changed_files) = match reason {
-            StalenessReason::FilesChanged { changed_files } => {
-                (Some("files_changed".to_string()), None, Some(changed_files.clone()))
-            }
-            StalenessReason::DependencyStale { dependency } => {
-                (Some("dependency_stale".to_string()), Some(dependency.clone()), None)
-            }
+            StalenessReason::FilesChanged { changed_files } => (
+                Some("files_changed".to_string()),
+                None,
+                Some(changed_files.clone()),
+            ),
+            StalenessReason::DependencyStale { dependency } => (
+                Some("dependency_stale".to_string()),
+                Some(dependency.clone()),
+                None,
+            ),
             StalenessReason::ConfigChanged => (Some("config_changed".to_string()), None, None),
             StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
         };
@@ -210,7 +218,10 @@ impl CheckRunJson {
 fn convert_metadata(
     metadata: &HashMap<String, MetadataValue>,
     prev_metadata: Option<&HashMap<String, MetadataValue>>,
-) -> (Option<HashMap<String, serde_json::Value>>, Option<HashMap<String, f64>>) {
+) -> (
+    Option<HashMap<String, serde_json::Value>>,
+    Option<HashMap<String, f64>>,
+) {
     if metadata.is_empty() {
         return (None, None);
     }
@@ -222,11 +233,9 @@ fn convert_metadata(
         // Convert to JSON value
         let json_value = match value {
             MetadataValue::Integer(i) => serde_json::Value::Number((*i).into()),
-            MetadataValue::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            MetadataValue::Float(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             MetadataValue::String(s) => serde_json::Value::String(s.clone()),
         };
         json_metadata.insert(key.clone(), json_value);
@@ -241,7 +250,11 @@ fn convert_metadata(
         }
     }
 
-    let metadata_deltas = if deltas.is_empty() { None } else { Some(deltas) };
+    let metadata_deltas = if deltas.is_empty() {
+        None
+    } else {
+        Some(deltas)
+    };
     (Some(json_metadata), metadata_deltas)
 }
 
@@ -319,12 +332,13 @@ impl RunResults {
             skipped: sub_results.skipped,
         };
 
-        self.results.push(RunItemJson::Subproject(SubprojectRunJson::new(
-            name,
-            path,
-            sub_results.results,
-            summary,
-        )));
+        self.results
+            .push(RunItemJson::Subproject(SubprojectRunJson::new(
+                name,
+                path,
+                sub_results.results,
+                summary,
+            )));
     }
 
     pub fn to_output(self) -> RunOutput {

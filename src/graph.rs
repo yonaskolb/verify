@@ -150,7 +150,10 @@ impl DependencyGraph {
         }
         visited.insert(node, true);
 
-        for dep in self.graph.neighbors_directed(node, petgraph::Direction::Incoming) {
+        for dep in self
+            .graph
+            .neighbors_directed(node, petgraph::Direction::Incoming)
+        {
             self.collect_deps(dep, visited);
         }
     }
@@ -404,11 +407,7 @@ mod tests {
 
     #[test]
     fn test_three_node_cycle() {
-        let config = make_config(vec![
-            ("a", vec!["c"]),
-            ("b", vec!["a"]),
-            ("c", vec!["b"]),
-        ]);
+        let config = make_config(vec![("a", vec!["c"]), ("b", vec!["a"]), ("c", vec!["b"])]);
         let result = DependencyGraph::from_config(&config);
         assert!(result.is_err());
         let err = result.err().unwrap();
@@ -427,11 +426,7 @@ mod tests {
 
     #[test]
     fn test_dependencies_direct() {
-        let config = make_config(vec![
-            ("a", vec![]),
-            ("b", vec![]),
-            ("c", vec!["a", "b"]),
-        ]);
+        let config = make_config(vec![("a", vec![]), ("b", vec![]), ("c", vec!["a", "b"])]);
         let graph = DependencyGraph::from_config(&config).unwrap();
 
         let deps = graph.dependencies("c");
@@ -460,11 +455,7 @@ mod tests {
 
     #[test]
     fn test_dependents_direct() {
-        let config = make_config(vec![
-            ("a", vec![]),
-            ("b", vec!["a"]),
-            ("c", vec!["a"]),
-        ]);
+        let config = make_config(vec![("a", vec![]), ("b", vec!["a"]), ("c", vec!["a"])]);
         let graph = DependencyGraph::from_config(&config).unwrap();
 
         let dependents = graph.dependents("a");
@@ -475,10 +466,7 @@ mod tests {
 
     #[test]
     fn test_dependents_none() {
-        let config = make_config(vec![
-            ("a", vec![]),
-            ("b", vec!["a"]),
-        ]);
+        let config = make_config(vec![("a", vec![]), ("b", vec!["a"])]);
         let graph = DependencyGraph::from_config(&config).unwrap();
 
         // b has no dependents (it's a leaf)

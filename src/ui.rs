@@ -1,7 +1,7 @@
 use crate::cache::StalenessReason;
-use crate::metadata::{compute_delta, MetadataValue};
+use crate::metadata::{MetadataValue, compute_delta};
 use crate::output::format_duration;
-use console::{style, Term};
+use console::{Term, style};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -187,7 +187,6 @@ impl Ui {
         ));
     }
 
-
     /// Print when a check fails
     #[allow(dead_code)]
     pub fn print_fail(&self, name: &str, duration_ms: u64, output: Option<&str>) {
@@ -235,8 +234,7 @@ impl Ui {
             if skip_count > 0 {
                 println!(
                     "{}{} lines omitted (use --verbose to see all)",
-                    output_prefix,
-                    skip_count
+                    output_prefix, skip_count
                 );
             }
         }
@@ -318,14 +316,20 @@ impl Ui {
             style(ICON_CIRCLE).green().bold(),
             style(path).bold()
         );
-        println!("  Run {} to see check status", style("verify status").cyan());
+        println!(
+            "  Run {} to see check status",
+            style("verify status").cyan()
+        );
         println!("  Run {} to execute checks", style("verify").cyan());
     }
 
     /// Print cache cleaned message
     pub fn print_cache_cleaned(&self, names: &[String]) {
         if names.is_empty() {
-            println!("{} Cleared all cached results", style(ICON_CIRCLE).green().bold());
+            println!(
+                "{} Cleared all cached results",
+                style(ICON_CIRCLE).green().bold()
+            );
         } else {
             println!(
                 "{} Cleared cache for: {}",

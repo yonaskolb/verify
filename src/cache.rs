@@ -110,8 +110,7 @@ impl CacheState {
         let file = File::create(&temp_path)
             .with_context(|| format!("Failed to create temp lock file: {}", temp_path.display()))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)
-            .with_context(|| "Failed to serialize cache")?;
+        serde_json::to_writer_pretty(writer, self).with_context(|| "Failed to serialize cache")?;
 
         // Atomic rename
         fs::rename(&temp_path, &lock_path)
@@ -178,7 +177,11 @@ impl CacheState {
                 config_hash: Some(config_hash),
                 content_hash,
                 // Only store file_hashes for per_file checks
-                file_hashes: if per_file { file_hashes } else { BTreeMap::new() },
+                file_hashes: if per_file {
+                    file_hashes
+                } else {
+                    BTreeMap::new()
+                },
                 metadata,
             }
         } else {
@@ -208,12 +211,14 @@ impl CacheState {
 
     /// Initialize or get mutable cache entry for per_file mode
     pub fn get_or_create_mut(&mut self, check_name: &str, config_hash: &str) -> &mut CheckCache {
-        self.checks.entry(check_name.to_string()).or_insert_with(|| CheckCache {
-            config_hash: Some(config_hash.to_string()),
-            content_hash: None,
-            file_hashes: BTreeMap::new(),
-            metadata: HashMap::new(),
-        })
+        self.checks
+            .entry(check_name.to_string())
+            .or_insert_with(|| CheckCache {
+                config_hash: Some(config_hash.to_string()),
+                content_hash: None,
+                file_hashes: BTreeMap::new(),
+                metadata: HashMap::new(),
+            })
     }
 
     /// Update cache for a single file in per_file mode
@@ -254,7 +259,8 @@ impl CacheState {
 
     /// Remove cache entries for checks not in the valid set
     pub fn cleanup_orphaned(&mut self, valid_check_names: &HashSet<String>) {
-        self.checks.retain(|name, _| valid_check_names.contains(name));
+        self.checks
+            .retain(|name, _| valid_check_names.contains(name));
     }
 
     /// Clear cache for specific checks or all

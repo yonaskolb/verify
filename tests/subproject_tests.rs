@@ -1,6 +1,5 @@
 /// Subproject integration tests
 /// Tests for multi-project scenarios with nested verify.yaml files
-
 mod common;
 
 use common::TestProject;

@@ -312,7 +312,9 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
     let should_append = if gitignore_path.exists() {
         let gitignore_content = fs::read_to_string(&gitignore_path)
             .with_context(|| format!("Failed to read .gitignore: {}", gitignore_path.display()))?;
-        !gitignore_content.lines().any(|line| line.trim() == cache_pattern)
+        !gitignore_content
+            .lines()
+            .any(|line| line.trim() == cache_pattern)
     } else {
         true
     };
@@ -335,18 +337,26 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
             }
         }
 
-        writeln!(file, "{}", cache_pattern)
-            .with_context(|| "Failed to write to .gitignore")?;
+        writeln!(file, "{}", cache_pattern).with_context(|| "Failed to write to .gitignore")?;
     }
 
     // Add verify.lock merge strategy to .gitattributes
-    let gitattributes_path = path.parent().unwrap_or(Path::new(".")).join(".gitattributes");
+    let gitattributes_path = path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".gitattributes");
     let lock_pattern = "verify.lock merge=ours";
 
     let should_append_gitattributes = if gitattributes_path.exists() {
-        let gitattributes_content = fs::read_to_string(&gitattributes_path)
-            .with_context(|| format!("Failed to read .gitattributes: {}", gitattributes_path.display()))?;
-        !gitattributes_content.lines().any(|line| line.trim() == lock_pattern)
+        let gitattributes_content = fs::read_to_string(&gitattributes_path).with_context(|| {
+            format!(
+                "Failed to read .gitattributes: {}",
+                gitattributes_path.display()
+            )
+        })?;
+        !gitattributes_content
+            .lines()
+            .any(|line| line.trim() == lock_pattern)
     } else {
         true
     };
@@ -359,7 +369,12 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
             .create(true)
             .append(true)
             .open(&gitattributes_path)
-            .with_context(|| format!("Failed to open .gitattributes: {}", gitattributes_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "Failed to open .gitattributes: {}",
+                    gitattributes_path.display()
+                )
+            })?;
 
         // Add newline before if file exists and doesn't end with newline
         if gitattributes_path.exists() {
@@ -369,8 +384,7 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
             }
         }
 
-        writeln!(file, "{}", lock_pattern)
-            .with_context(|| "Failed to write to .gitattributes")?;
+        writeln!(file, "{}", lock_pattern).with_context(|| "Failed to write to .gitattributes")?;
     }
 
     Ok(())
@@ -693,7 +707,10 @@ verifications: []
         use crate::config::MetadataPattern;
 
         let mut metadata1 = HashMap::new();
-        metadata1.insert("coverage".to_string(), MetadataPattern::Simple(r"(\d+)%".to_string()));
+        metadata1.insert(
+            "coverage".to_string(),
+            MetadataPattern::Simple(r"(\d+)%".to_string()),
+        );
 
         let v1 = Verification {
             name: "test".to_string(),

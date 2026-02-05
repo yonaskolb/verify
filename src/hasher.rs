@@ -24,11 +24,12 @@ pub fn compute_check_hash(project_root: &Path, cache_paths: &[String]) -> Result
         let full_pattern = project_root.join(pattern);
         let pattern_str = full_pattern.to_string_lossy();
 
-        let entries = glob(&pattern_str)
-            .with_context(|| format!("Invalid glob pattern: {}", pattern))?;
+        let entries =
+            glob(&pattern_str).with_context(|| format!("Invalid glob pattern: {}", pattern))?;
 
         for entry in entries {
-            let path = entry.with_context(|| format!("Error reading glob entry for: {}", pattern))?;
+            let path =
+                entry.with_context(|| format!("Error reading glob entry for: {}", pattern))?;
 
             if path.is_file() {
                 let relative = path
@@ -319,10 +320,8 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("test.rs"), "content").unwrap();
 
-        let result = compute_check_hash(
-            dir.path(),
-            &["*.rs".to_string(), "test.rs".to_string()],
-        ).unwrap();
+        let result =
+            compute_check_hash(dir.path(), &["*.rs".to_string(), "test.rs".to_string()]).unwrap();
 
         // Should only have one entry despite matching both patterns
         assert_eq!(result.file_hashes.len(), 1);
@@ -395,10 +394,8 @@ mod tests {
         fs::write(dir.path().join("code.ts"), "typescript").unwrap();
         fs::write(dir.path().join("readme.md"), "docs").unwrap();
 
-        let result = compute_check_hash(
-            dir.path(),
-            &["*.rs".to_string(), "*.ts".to_string()],
-        ).unwrap();
+        let result =
+            compute_check_hash(dir.path(), &["*.rs".to_string(), "*.ts".to_string()]).unwrap();
 
         assert_eq!(result.file_hashes.len(), 2);
         assert!(result.file_hashes.contains_key("code.rs"));

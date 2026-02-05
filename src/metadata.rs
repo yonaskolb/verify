@@ -94,7 +94,10 @@ mod tests {
     #[test]
     fn test_simple_pattern() {
         let mut patterns = HashMap::new();
-        patterns.insert("count".to_string(), MetadataPattern::Simple(r"Total: (\d+)".to_string()));
+        patterns.insert(
+            "count".to_string(),
+            MetadataPattern::Simple(r"Total: (\d+)".to_string()),
+        );
 
         let output = "Processing...\nTotal: 42 items\nDone!";
         let metadata = extract_metadata(output, &patterns);
@@ -109,7 +112,10 @@ mod tests {
     #[test]
     fn test_float_extraction() {
         let mut patterns = HashMap::new();
-        patterns.insert("coverage".to_string(), MetadataPattern::Simple(r"Coverage: ([\d.]+)%".to_string()));
+        patterns.insert(
+            "coverage".to_string(),
+            MetadataPattern::Simple(r"Coverage: ([\d.]+)%".to_string()),
+        );
 
         let output = "Coverage: 85.5%";
         let metadata = extract_metadata(output, &patterns);
@@ -140,7 +146,10 @@ mod tests {
     #[test]
     fn test_no_match() {
         let mut patterns = HashMap::new();
-        patterns.insert("count".to_string(), MetadataPattern::Simple(r"Total: (\d+)".to_string()));
+        patterns.insert(
+            "count".to_string(),
+            MetadataPattern::Simple(r"Total: (\d+)".to_string()),
+        );
 
         let output = "No total here";
         let metadata = extract_metadata(output, &patterns);

@@ -20,7 +20,10 @@ fn verify_binary() -> PathBuf {
             .expect("Failed to build project");
 
         if !output.status.success() {
-            panic!("Failed to build: {}", String::from_utf8_lossy(&output.stderr));
+            panic!(
+                "Failed to build: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 
@@ -32,8 +35,7 @@ fn setup_test_project(config_yaml: &str) -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Write verify.yaml
-    fs::write(temp_dir.path().join("verify.yaml"), config_yaml)
-        .expect("Failed to write config");
+    fs::write(temp_dir.path().join("verify.yaml"), config_yaml).expect("Failed to write config");
 
     temp_dir
 }
@@ -130,7 +132,11 @@ verifications:
 
     assert!(success, "Run should succeed");
     // Output shows "N verified" summary
-    assert!(stdout.contains("verified"), "Expected 'verified' in output: {}", stdout);
+    assert!(
+        stdout.contains("verified"),
+        "Expected 'verified' in output: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -233,7 +239,11 @@ verifications:
 
     assert!(success);
     // Should show only 1 verified (not 2)
-    assert!(stdout.contains("1 verified"), "Expected '1 verified' in output: {}", stdout);
+    assert!(
+        stdout.contains("1 verified"),
+        "Expected '1 verified' in output: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -403,7 +413,12 @@ verifications:
         let lock_content = fs::read_to_string(temp_dir.path().join("verify.lock")).unwrap();
         let lock: serde_json::Value = serde_json::from_str(&lock_content).unwrap();
         // Checks object should be empty
-        assert!(lock["checks"].as_object().map(|o| o.is_empty()).unwrap_or(true));
+        assert!(
+            lock["checks"]
+                .as_object()
+                .map(|o| o.is_empty())
+                .unwrap_or(true)
+        );
     }
 }
 
@@ -499,13 +514,19 @@ fn test_missing_config_file() {
     let (success, _stdout, stderr) = run_verify(temp_dir.path(), &["run"]);
 
     assert!(!success);
-    assert!(stderr.contains("verify.yaml") || stderr.contains("config") || stderr.contains("not found"));
+    assert!(
+        stderr.contains("verify.yaml") || stderr.contains("config") || stderr.contains("not found")
+    );
 }
 
 #[test]
 fn test_invalid_config_syntax() {
     let temp_dir = TempDir::new().unwrap();
-    fs::write(temp_dir.path().join("verify.yaml"), "invalid: [yaml: syntax").unwrap();
+    fs::write(
+        temp_dir.path().join("verify.yaml"),
+        "invalid: [yaml: syntax",
+    )
+    .unwrap();
 
     let (success, _stdout, stderr) = run_verify(temp_dir.path(), &["run"]);
 
@@ -550,7 +571,8 @@ verifications:
     assert!(!success, "Status should fail due to circular dependency");
     assert!(
         stderr.to_lowercase().contains("circular") || stderr.to_lowercase().contains("cycle"),
-        "Expected circular dependency error in stderr: {}", stderr
+        "Expected circular dependency error in stderr: {}",
+        stderr
     );
 }
 
@@ -599,8 +621,11 @@ fn test_metadata_extraction() {
         let check = results.iter().find(|c| c["name"] == "metadata_test");
         assert!(check.is_some(), "Should find metadata_test in results");
         if let Some(check) = check {
-            assert!(check["metadata"]["coverage"].is_number(),
-                "Coverage should be extracted as a number: {:?}", check["metadata"]);
+            assert!(
+                check["metadata"]["coverage"].is_number(),
+                "Coverage should be extracted as a number: {:?}",
+                check["metadata"]
+            );
         }
     }
 }
