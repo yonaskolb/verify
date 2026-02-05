@@ -1,6 +1,5 @@
 use crate::cache::StalenessReason;
 use crate::metadata::{compute_delta, MetadataValue};
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -49,26 +48,20 @@ pub struct CheckStatusJson {
     pub stale_dependency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed_files: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
 }
 
 impl CheckStatusJson {
-    pub fn fresh(name: &str, cache: &crate::cache::CheckCache) -> Self {
+    pub fn fresh(name: &str, _cache: &crate::cache::CheckCache) -> Self {
         Self {
             name: name.to_string(),
             status: "fresh".to_string(),
             reason: None,
             stale_dependency: None,
             changed_files: None,
-            last_run: Some(cache.last_run),
-            duration_ms: Some(cache.duration_ms),
         }
     }
 
-    pub fn stale(name: &str, reason: &StalenessReason, cache: Option<&crate::cache::CheckCache>) -> Self {
+    pub fn stale(name: &str, reason: &StalenessReason, _cache: Option<&crate::cache::CheckCache>) -> Self {
         let (reason_str, stale_dep, changed_files) = match reason {
             StalenessReason::FilesChanged { changed_files } => {
                 (Some("files_changed".to_string()), None, Some(changed_files.clone()))
@@ -76,7 +69,6 @@ impl CheckStatusJson {
             StalenessReason::DependencyStale { dependency } => {
                 (Some("dependency_stale".to_string()), Some(dependency.clone()), None)
             }
-            StalenessReason::LastRunFailed => (Some("last_run_failed".to_string()), None, None),
             StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
         };
 
@@ -86,8 +78,6 @@ impl CheckStatusJson {
             reason: reason_str,
             stale_dependency: stale_dep,
             changed_files,
-            last_run: cache.map(|c| c.last_run),
-            duration_ms: cache.map(|c| c.duration_ms),
         }
     }
 
@@ -98,8 +88,6 @@ impl CheckStatusJson {
             reason: None,
             stale_dependency: None,
             changed_files: None,
-            last_run: None,
-            duration_ms: None,
         }
     }
 }
@@ -146,14 +134,13 @@ impl SubprojectRunJson {
 pub struct CheckRunJson {
     pub name: String,
     pub result: String,
-    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     pub cached: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_delta_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,19 +154,16 @@ impl CheckRunJson {
         cached: bool,
         metadata: &HashMap<String, MetadataValue>,
         prev_metadata: Option<&HashMap<String, MetadataValue>>,
-        prev_duration: Option<u64>,
     ) -> Self {
         let (metadata_json, metadata_deltas) = convert_metadata(metadata, prev_metadata);
-        let duration_delta_ms = prev_duration.map(|p| duration_ms as i64 - p as i64);
 
         Self {
             name: name.to_string(),
             result: "pass".to_string(),
-            duration_ms,
+            duration_ms: Some(duration_ms),
             cached,
             exit_code: Some(0),
             output: None,
-            duration_delta_ms,
             metadata: metadata_json,
             metadata_deltas,
         }
@@ -192,33 +176,29 @@ impl CheckRunJson {
         output: Option<String>,
         metadata: &HashMap<String, MetadataValue>,
         prev_metadata: Option<&HashMap<String, MetadataValue>>,
-        prev_duration: Option<u64>,
     ) -> Self {
         let (metadata_json, metadata_deltas) = convert_metadata(metadata, prev_metadata);
-        let duration_delta_ms = prev_duration.map(|p| duration_ms as i64 - p as i64);
 
         Self {
             name: name.to_string(),
             result: "fail".to_string(),
-            duration_ms,
+            duration_ms: Some(duration_ms),
             cached: false,
             exit_code,
             output,
-            duration_delta_ms,
             metadata: metadata_json,
             metadata_deltas,
         }
     }
 
-    pub fn skipped(name: &str, last_duration_ms: Option<u64>) -> Self {
+    pub fn skipped(name: &str) -> Self {
         Self {
             name: name.to_string(),
             result: "skipped".to_string(),
-            duration_ms: last_duration_ms.unwrap_or(0),
+            duration_ms: None,
             cached: true,
             exit_code: None,
             output: None,
-            duration_delta_ms: None,
             metadata: None,
             metadata_deltas: None,
         }
@@ -289,23 +269,21 @@ impl RunResults {
         cached: bool,
         metadata: &HashMap<String, MetadataValue>,
         prev_metadata: Option<&HashMap<String, MetadataValue>>,
-        prev_duration: Option<u64>,
     ) {
-        if cached {
-            self.results
-                .push(RunItemJson::Check(CheckRunJson::skipped(name, Some(duration_ms))));
-            self.skipped += 1;
-        } else {
-            self.results.push(RunItemJson::Check(CheckRunJson::pass(
-                name,
-                duration_ms,
-                cached,
-                metadata,
-                prev_metadata,
-                prev_duration,
-            )));
-            self.passed += 1;
-        }
+        self.results.push(RunItemJson::Check(CheckRunJson::pass(
+            name,
+            duration_ms,
+            cached,
+            metadata,
+            prev_metadata,
+        )));
+        self.passed += 1;
+    }
+
+    pub fn add_skipped(&mut self, name: &str) {
+        self.results
+            .push(RunItemJson::Check(CheckRunJson::skipped(name)));
+        self.skipped += 1;
     }
 
     pub fn add_fail(
@@ -316,7 +294,6 @@ impl RunResults {
         output: Option<String>,
         metadata: &HashMap<String, MetadataValue>,
         prev_metadata: Option<&HashMap<String, MetadataValue>>,
-        prev_duration: Option<u64>,
     ) {
         self.results.push(RunItemJson::Check(CheckRunJson::fail(
             name,
@@ -325,7 +302,6 @@ impl RunResults {
             output,
             metadata,
             prev_metadata,
-            prev_duration,
         )));
         self.failed += 1;
     }
@@ -384,21 +360,5 @@ pub fn format_duration(ms: u64) -> String {
         let mins = ms / 60000;
         let secs = (ms % 60000) / 1000;
         format!("{}m{}s", mins, secs)
-    }
-}
-
-/// Format relative time for human display
-pub fn format_relative_time(time: &DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let duration = now.signed_duration_since(*time);
-
-    if duration.num_seconds() < 60 {
-        "just now".to_string()
-    } else if duration.num_minutes() < 60 {
-        format!("{}m ago", duration.num_minutes())
-    } else if duration.num_hours() < 24 {
-        format!("{}h ago", duration.num_hours())
-    } else {
-        format!("{}d ago", duration.num_days())
     }
 }

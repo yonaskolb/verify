@@ -281,6 +281,40 @@ pub fn init_config(path: &Path, force: bool) -> Result<()> {
             .with_context(|| "Failed to write to .gitignore")?;
     }
 
+    // Add verify.lock merge strategy to .gitattributes
+    let gitattributes_path = path.parent().unwrap_or(Path::new(".")).join(".gitattributes");
+    let lock_pattern = "verify.lock merge=ours";
+
+    let should_append_gitattributes = if gitattributes_path.exists() {
+        let gitattributes_content = fs::read_to_string(&gitattributes_path)
+            .with_context(|| format!("Failed to read .gitattributes: {}", gitattributes_path.display()))?;
+        !gitattributes_content.lines().any(|line| line.trim() == lock_pattern)
+    } else {
+        true
+    };
+
+    if should_append_gitattributes {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&gitattributes_path)
+            .with_context(|| format!("Failed to open .gitattributes: {}", gitattributes_path.display()))?;
+
+        // Add newline before if file exists and doesn't end with newline
+        if gitattributes_path.exists() {
+            let content = fs::read_to_string(&gitattributes_path).unwrap_or_default();
+            if !content.is_empty() && !content.ends_with('\n') {
+                writeln!(file)?;
+            }
+        }
+
+        writeln!(file, "{}", lock_pattern)
+            .with_context(|| "Failed to write to .gitattributes")?;
+    }
+
     Ok(())
 }
 

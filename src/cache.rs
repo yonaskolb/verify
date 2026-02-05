@@ -1,18 +1,16 @@
 use crate::hasher::FileHash;
 use crate::metadata::MetadataValue;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::Path;
 
-const CACHE_VERSION: u32 = 1;
-const CACHE_DIR: &str = ".verify";
-const CACHE_FILE: &str = "cache.json";
+const CACHE_VERSION: u32 = 2;
+const LOCK_FILE: &str = "verify.lock";
 
-/// Root cache structure stored in .verify/cache.json
+/// Root cache structure stored in verify.lock
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct CacheState {
     /// Version for future cache format migrations
@@ -25,37 +23,18 @@ pub struct CacheState {
 /// Cache state for a single verification check
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CheckCache {
-    /// Result of the last run
-    pub last_result: CheckResult,
-
-    /// When the check was last run
-    pub last_run: DateTime<Utc>,
-
-    /// Duration of the last run in milliseconds
-    pub duration_ms: u64,
-
     /// Hash of all files matching cache_paths at time of last successful run
-    /// Only stored on success - used to detect staleness
+    /// None means the check needs to run (never passed or last run failed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
 
-    /// Individual file hashes for debugging/transparency
+    /// Individual file hashes for debugging/transparency and per_file partial progress
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_hashes: BTreeMap<String, FileHash>,
 
-    /// Extracted metadata values from last run
+    /// Extracted metadata values from last successful run
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, MetadataValue>,
-}
-
-/// Result of a verification check
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CheckResult {
-    /// Check passed (exit code 0)
-    Pass,
-    /// Check failed (non-zero exit code)
-    Fail,
 }
 
 /// Computed staleness status for a check
@@ -76,8 +55,6 @@ pub enum StalenessReason {
     FilesChanged { changed_files: Vec<String> },
     /// A dependency is stale
     DependencyStale { dependency: String },
-    /// Last run failed
-    LastRunFailed,
     /// No cache_paths defined - always run
     NoCachePaths,
 }
@@ -91,23 +68,26 @@ impl CacheState {
         }
     }
 
-    /// Load cache from disk, returning empty cache if file doesn't exist
+    /// Load cache from disk, returning empty cache if file doesn't exist or can't be parsed
     pub fn load(project_root: &Path) -> Result<Self> {
-        let cache_path = project_root.join(CACHE_DIR).join(CACHE_FILE);
+        let lock_path = project_root.join(LOCK_FILE);
 
-        if !cache_path.exists() {
+        if !lock_path.exists() {
             return Ok(Self::new());
         }
 
-        let content = fs::read_to_string(&cache_path)
-            .with_context(|| format!("Failed to read cache file: {}", cache_path.display()))?;
+        let content = match fs::read_to_string(&lock_path) {
+            Ok(c) => c,
+            Err(_) => return Ok(Self::new()),
+        };
 
-        let cache: CacheState = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse cache file: {}", cache_path.display()))?;
+        let cache: CacheState = match serde_json::from_str(&content) {
+            Ok(c) => c,
+            Err(_) => return Ok(Self::new()),
+        };
 
-        // Handle version migration if needed
+        // Handle version migration - just return empty cache on version mismatch
         if cache.version != CACHE_VERSION {
-            // For now, just return empty cache on version mismatch
             return Ok(Self::new());
         }
 
@@ -116,23 +96,19 @@ impl CacheState {
 
     /// Save cache to disk atomically
     pub fn save(&self, project_root: &Path) -> Result<()> {
-        let cache_dir = project_root.join(CACHE_DIR);
-        fs::create_dir_all(&cache_dir)
-            .with_context(|| format!("Failed to create cache directory: {}", cache_dir.display()))?;
-
-        let cache_path = cache_dir.join(CACHE_FILE);
-        let temp_path = cache_dir.join("cache.json.tmp");
+        let lock_path = project_root.join(LOCK_FILE);
+        let temp_path = project_root.join("verify.lock.tmp");
 
         // Write to temp file
         let file = File::create(&temp_path)
-            .with_context(|| format!("Failed to create temp cache file: {}", temp_path.display()))?;
+            .with_context(|| format!("Failed to create temp lock file: {}", temp_path.display()))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, self)
             .with_context(|| "Failed to serialize cache")?;
 
         // Atomic rename
-        fs::rename(&temp_path, &cache_path)
-            .with_context(|| format!("Failed to save cache file: {}", cache_path.display()))?;
+        fs::rename(&temp_path, &lock_path)
+            .with_context(|| format!("Failed to save lock file: {}", lock_path.display()))?;
 
         Ok(())
     }
@@ -142,13 +118,6 @@ impl CacheState {
         match self.checks.get(check_name) {
             None => StalenessStatus::NeverRun,
             Some(cache) => {
-                // If last run failed, always re-run
-                if cache.last_result == CheckResult::Fail {
-                    return StalenessStatus::Stale {
-                        reason: StalenessReason::LastRunFailed,
-                    };
-                }
-
                 match &cache.content_hash {
                     None => StalenessStatus::NeverRun,
                     Some(stored_hash) => {
@@ -171,30 +140,29 @@ impl CacheState {
     pub fn update(
         &mut self,
         check_name: &str,
-        result: CheckResult,
-        duration_ms: u64,
+        success: bool,
         content_hash: Option<String>,
         file_hashes: BTreeMap<String, FileHash>,
         metadata: HashMap<String, MetadataValue>,
     ) {
-        let cache = CheckCache {
-            last_result: result,
-            last_run: Utc::now(),
-            duration_ms,
-            // Only store hash on success
-            content_hash: if result == CheckResult::Pass {
-                content_hash
-            } else {
-                self.checks
+        let cache = if success {
+            CheckCache {
+                content_hash,
+                file_hashes,
+                metadata,
+            }
+        } else {
+            // On failure, clear content_hash (will trigger re-run)
+            // but keep file_hashes for per_file partial progress
+            CheckCache {
+                content_hash: None,
+                file_hashes: self
+                    .checks
                     .get(check_name)
-                    .and_then(|c| c.content_hash.clone())
-            },
-            file_hashes: if result == CheckResult::Pass {
-                file_hashes
-            } else {
-                BTreeMap::new()
-            },
-            metadata,
+                    .map(|c| c.file_hashes.clone())
+                    .unwrap_or_default(),
+                metadata: HashMap::new(),
+            }
         };
         self.checks.insert(check_name.to_string(), cache);
     }
@@ -207,9 +175,6 @@ impl CacheState {
     /// Initialize or get mutable cache entry for per_file mode
     pub fn get_or_create_mut(&mut self, check_name: &str) -> &mut CheckCache {
         self.checks.entry(check_name.to_string()).or_insert_with(|| CheckCache {
-            last_result: CheckResult::Fail, // Will be updated on completion
-            last_run: Utc::now(),
-            duration_ms: 0,
             content_hash: None,
             file_hashes: BTreeMap::new(),
             metadata: HashMap::new(),
@@ -231,27 +196,26 @@ impl CacheState {
     pub fn finalize_per_file(
         &mut self,
         check_name: &str,
-        duration_ms: u64,
         combined_hash: String,
         file_hashes: BTreeMap<String, FileHash>,
         metadata: HashMap<String, MetadataValue>,
     ) {
         let cache = self.get_or_create_mut(check_name);
-        cache.last_result = CheckResult::Pass;
-        cache.last_run = Utc::now();
-        cache.duration_ms = duration_ms;
         cache.content_hash = Some(combined_hash);
         cache.file_hashes = file_hashes;
         cache.metadata = metadata;
     }
 
-    /// Mark per_file check as failed
-    pub fn mark_per_file_failed(&mut self, check_name: &str, duration_ms: u64) {
+    /// Mark per_file check as failed (keeps partial file_hashes for progress)
+    pub fn mark_per_file_failed(&mut self, check_name: &str) {
         let cache = self.get_or_create_mut(check_name);
-        cache.last_result = CheckResult::Fail;
-        cache.last_run = Utc::now();
-        cache.duration_ms = duration_ms;
+        cache.content_hash = None;
         // Keep existing file_hashes for partial progress
+    }
+
+    /// Remove cache entries for checks not in the valid set
+    pub fn cleanup_orphaned(&mut self, valid_check_names: &HashSet<String>) {
+        self.checks.retain(|name, _| valid_check_names.contains(name));
     }
 
     /// Clear cache for specific checks or all
@@ -266,7 +230,7 @@ impl CacheState {
     }
 }
 
-/// Clean the cache directory
+/// Clean the cache file
 pub fn clean_cache(project_root: &Path, names: Vec<String>) -> Result<()> {
     let mut cache = CacheState::load(project_root)?;
     cache.clear(&names);
@@ -292,8 +256,7 @@ mod tests {
         let mut cache = CacheState::new();
         cache.update(
             "test",
-            CheckResult::Pass,
-            1000,
+            true,
             Some("abc123".to_string()),
             BTreeMap::new(),
             HashMap::new(),
@@ -310,8 +273,7 @@ mod tests {
         let mut cache = CacheState::new();
         cache.update(
             "test",
-            CheckResult::Pass,
-            1000,
+            true,
             Some("abc123".to_string()),
             BTreeMap::new(),
             HashMap::new(),
@@ -326,13 +288,25 @@ mod tests {
     #[test]
     fn test_staleness_after_failure() {
         let mut cache = CacheState::new();
-        cache.update("test", CheckResult::Fail, 1000, None, BTreeMap::new(), HashMap::new());
+        cache.update("test", false, Some("abc123".to_string()), BTreeMap::new(), HashMap::new());
 
-        match cache.check_staleness("test", "anyhash") {
-            StalenessStatus::Stale {
-                reason: StalenessReason::LastRunFailed,
-            } => {}
-            other => panic!("Expected Stale(LastRunFailed), got {:?}", other),
-        }
+        // After failure, content_hash is cleared, so it should be NeverRun
+        assert_eq!(
+            cache.check_staleness("test", "anyhash"),
+            StalenessStatus::NeverRun
+        );
+    }
+
+    #[test]
+    fn test_cleanup_orphaned() {
+        let mut cache = CacheState::new();
+        cache.update("keep", true, Some("hash1".to_string()), BTreeMap::new(), HashMap::new());
+        cache.update("remove", true, Some("hash2".to_string()), BTreeMap::new(), HashMap::new());
+
+        let valid: HashSet<String> = vec!["keep".to_string()].into_iter().collect();
+        cache.cleanup_orphaned(&valid);
+
+        assert!(cache.get("keep").is_some());
+        assert!(cache.get("remove").is_none());
     }
 }

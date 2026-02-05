@@ -1,7 +1,6 @@
 use crate::cache::StalenessReason;
 use crate::metadata::{compute_delta, MetadataValue};
-use crate::output::{format_duration, format_relative_time};
-use chrono::{DateTime, Utc};
+use crate::output::format_duration;
 use console::{style, Term};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
@@ -47,27 +46,19 @@ impl Ui {
 
     /// Print status for a fresh check
     #[allow(dead_code)]
-    pub fn print_status_fresh(&self, name: &str, last_run: &DateTime<Utc>, duration_ms: u64) {
-        self.print_status_fresh_indented(name, last_run, duration_ms, 0);
+    pub fn print_status_fresh(&self, name: &str) {
+        self.print_status_fresh_indented(name, 0);
     }
 
     /// Print status for a fresh check with indentation
-    pub fn print_status_fresh_indented(
-        &self,
-        name: &str,
-        last_run: &DateTime<Utc>,
-        duration_ms: u64,
-        indent: usize,
-    ) {
+    pub fn print_status_fresh_indented(&self, name: &str, indent: usize) {
         let prefix = Self::indent_str(indent);
         println!(
-            "{}{} {} - {} (ran {}, {})",
+            "{}{} {} - {}",
             prefix,
             style(ICON_CIRCLE).green().bold(),
             style(name).bold(),
-            style("fresh").green(),
-            format_relative_time(last_run),
-            format_duration(duration_ms)
+            style("fresh").green()
         );
     }
 
@@ -91,7 +82,6 @@ impl Ui {
             StalenessReason::DependencyStale { dependency } => {
                 format!("depends on: {}", dependency)
             }
-            StalenessReason::LastRunFailed => "last run failed".to_string(),
             StalenessReason::NoCachePaths => "no cache paths".to_string(),
         };
 

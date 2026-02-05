@@ -1,4 +1,4 @@
-use crate::cache::{CacheState, CheckResult, StalenessReason, StalenessStatus};
+use crate::cache::{CacheState, StalenessReason, StalenessStatus};
 use crate::config::{Config, Subproject, Verification, VerificationItem};
 use crate::graph::DependencyGraph;
 use crate::hasher::{compute_check_hash, find_changed_files, HashResult};
@@ -22,7 +22,7 @@ use std::time::Instant;
 #[derive(Debug)]
 pub struct CheckExecution {
     pub name: String,
-    pub result: CheckResult,
+    pub success: bool,
     pub duration_ms: u64,
     pub exit_code: Option<i32>,
     pub output: Option<String>,
@@ -267,13 +267,7 @@ fn run_status_recursive(
                 } else {
                     match &staleness {
                         StalenessStatus::Fresh => {
-                            let cached = cache.get(&v.name).unwrap();
-                            ui.print_status_fresh_indented(
-                                &v.name,
-                                &cached.last_run,
-                                cached.duration_ms,
-                                indent,
-                            );
+                            ui.print_status_fresh_indented(&v.name, indent);
                         }
                         StalenessStatus::Stale { reason } => {
                             ui.print_status_stale_indented(&v.name, reason, indent);
@@ -376,6 +370,14 @@ pub fn run_checks(
     let ui = Ui::new(verbose);
     let final_results =
         run_checks_recursive(project_root, config, cache, &names, force, json, &ui, 0)?;
+
+    // Clean up orphaned cache entries (checks no longer in config)
+    let valid_names: std::collections::HashSet<String> = config
+        .verifications
+        .iter()
+        .map(|item| item.name().to_string())
+        .collect();
+    cache.cleanup_orphaned(&valid_names);
 
     // Save cache for root project
     cache.save(project_root)?;
@@ -605,23 +607,13 @@ fn execute_verification(
             let cached_metadata = cached.map(|c| &c.metadata);
             finish_cached(&pb, &check.name, cached_metadata.unwrap_or(&HashMap::new()), indent);
         }
-        // For cached (skipped) checks, pass empty metadata since we didn't run the command
-        let empty_metadata = HashMap::new();
-        results.add_pass(
-            &check.name,
-            cached.map(|c| c.duration_ms).unwrap_or(0),
-            true,
-            &empty_metadata,
-            None,
-            None,
-        );
+        results.add_skipped(&check.name);
         executed.insert(check.name.clone(), false);
         return Ok(());
     }
 
-    // Get previous cache for duration and metadata deltas
+    // Get previous cache for metadata deltas
     let prev_cache = cache.get(&check.name);
-    let prev_duration = prev_cache.map(|c| c.duration_ms);
     let prev_metadata = prev_cache.map(|c| c.metadata.clone());
 
     // Handle per_file mode
@@ -637,7 +629,6 @@ fn execute_verification(
             indent,
             executed,
             results,
-            prev_duration,
             prev_metadata,
         );
     }
@@ -660,12 +651,6 @@ fn execute_verification(
     let duration = start.elapsed();
     let duration_ms = duration.as_millis() as u64;
 
-    let result = if success {
-        CheckResult::Pass
-    } else {
-        CheckResult::Fail
-    };
-
     // Extract metadata from output (only on success)
     let metadata = if success && !check.metadata.is_empty() {
         extract_metadata(&output, &check.metadata)
@@ -676,55 +661,51 @@ fn execute_verification(
     // Update cache
     cache.update(
         &check.name,
-        result,
-        duration_ms,
+        success,
         Some(hash_result.combined_hash.clone()),
         hash_result.file_hashes,
         metadata.clone(),
     );
 
     // Record result
-    executed.insert(check.name.clone(), result == CheckResult::Fail);
+    executed.insert(check.name.clone(), !success);
 
-    match result {
-        CheckResult::Pass => {
-            if let Some(pb) = pb {
-                finish_pass_with_metadata(
-                    &pb,
-                    &check.name,
-                    duration_ms,
-                    &metadata,
-                    prev_metadata.as_ref(),
-                    indent,
-                );
-            } else if !json {
-                // Verbose mode: print completion line
-                ui.print_pass_indented(&check.name, duration_ms, indent);
-            }
-            results.add_pass(&check.name, duration_ms, false, &metadata, prev_metadata.as_ref(), prev_duration);
+    if success {
+        if let Some(pb) = pb {
+            finish_pass_with_metadata(
+                &pb,
+                &check.name,
+                duration_ms,
+                &metadata,
+                prev_metadata.as_ref(),
+                indent,
+            );
+        } else if !json {
+            // Verbose mode: print completion line
+            ui.print_pass_indented(&check.name, duration_ms, indent);
         }
-        CheckResult::Fail => {
-            if let Some(pb) = pb {
-                finish_fail_with_metadata(
-                    &pb,
-                    &check.name,
-                    &check.command,
-                    duration_ms,
-                    &metadata,
-                    prev_metadata.as_ref(),
-                    indent,
-                );
-            } else if !json {
-                // Verbose mode: print failure line
-                ui.print_fail_indented(&check.name, duration_ms, None, indent);
-            }
-            // Print error output separately (can't be part of progress bar)
-            // In verbose mode, output was already streamed, so skip
-            if !json && !ui.is_verbose() {
-                ui.print_fail_output(Some(&output), indent);
-            }
-            results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref(), prev_duration);
+        results.add_pass(&check.name, duration_ms, false, &metadata, prev_metadata.as_ref());
+    } else {
+        if let Some(pb) = pb {
+            finish_fail_with_metadata(
+                &pb,
+                &check.name,
+                &check.command,
+                duration_ms,
+                &metadata,
+                prev_metadata.as_ref(),
+                indent,
+            );
+        } else if !json {
+            // Verbose mode: print failure line
+            ui.print_fail_indented(&check.name, duration_ms, None, indent);
         }
+        // Print error output separately (can't be part of progress bar)
+        // In verbose mode, output was already streamed, so skip
+        if !json && !ui.is_verbose() {
+            ui.print_fail_output(Some(&output), indent);
+        }
+        results.add_fail(&check.name, duration_ms, exit_code, Some(output), &metadata, prev_metadata.as_ref());
     }
 
     // Save cache immediately after check completes
@@ -745,7 +726,6 @@ fn execute_per_file(
     indent: usize,
     executed: &mut HashMap<String, bool>,
     results: &mut RunResults,
-    prev_duration: Option<u64>,
     prev_metadata: Option<HashMap<String, MetadataValue>>,
 ) -> Result<()> {
     // For per_file mode, compute stale files by comparing cached vs current file hashes.
@@ -764,15 +744,7 @@ fn execute_per_file(
         if !json {
             ui.print_per_file_cached(&check.name, total_files, indent);
         }
-        let empty_metadata = HashMap::new();
-        results.add_pass(
-            &check.name,
-            prev_duration.unwrap_or(0),
-            true,
-            &empty_metadata,
-            None,
-            None,
-        );
+        results.add_skipped(&check.name);
         executed.insert(check.name.clone(), false);
         return Ok(());
     }
@@ -842,7 +814,7 @@ fn execute_per_file(
 
             // Mark check as failed and stop
             let total_duration_ms = start.elapsed().as_millis() as u64;
-            cache.mark_per_file_failed(&check.name, total_duration_ms);
+            cache.mark_per_file_failed(&check.name);
             executed.insert(check.name.clone(), true);
 
             let empty_metadata = HashMap::new();
@@ -853,7 +825,6 @@ fn execute_per_file(
                 Some(output),
                 &empty_metadata,
                 prev_metadata.as_ref(),
-                prev_duration,
             );
 
             // Save cache immediately after per_file check fails
@@ -876,7 +847,6 @@ fn execute_per_file(
     let total_duration_ms = start.elapsed().as_millis() as u64;
     cache.finalize_per_file(
         &check.name,
-        total_duration_ms,
         hash_result.combined_hash.clone(),
         hash_result.file_hashes.clone(),
         metadata.clone(),
@@ -889,7 +859,6 @@ fn execute_per_file(
         false,
         &metadata,
         prev_metadata.as_ref(),
-        prev_duration,
     );
 
     // Save cache immediately after per_file check completes
@@ -930,6 +899,14 @@ fn run_checks_subproject(
         ui,
         indent + 1,
     )?;
+
+    // Clean up orphaned cache entries
+    let valid_names: std::collections::HashSet<String> = sub_config
+        .verifications
+        .iter()
+        .map(|item| item.name().to_string())
+        .collect();
+    sub_cache.cleanup_orphaned(&valid_names);
 
     // Save subproject cache
     sub_cache.save(&subproject_dir)?;
