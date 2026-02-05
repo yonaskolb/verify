@@ -58,7 +58,7 @@ fn run() -> Result<i32> {
             Ok(0)
         }
 
-        Commands::Run { names, force } => {
+        Commands::Run { names, force, stage } => {
             let config = config::Config::load(config_path)?;
             let mut cache = cache::CacheState::load(&project_root)?;
 
@@ -69,7 +69,7 @@ fn run() -> Result<i32> {
                 }
             }
 
-            runner::run_checks(
+            let result = runner::run_checks(
                 &project_root,
                 &config,
                 &mut cache,
@@ -77,7 +77,21 @@ fn run() -> Result<i32> {
                 force,
                 cli.json,
                 cli.verbose,
-            )
+            )?;
+
+            // Stage verify.lock if requested (from either cli.stage or run --stage) and checks passed
+            if (cli.stage || stage) && result == 0 {
+                let lock_path = project_root.join("verify.lock");
+                if lock_path.exists() {
+                    std::process::Command::new("git")
+                        .args(["add", "verify.lock"])
+                        .current_dir(&project_root)
+                        .status()
+                        .ok(); // Ignore errors (might not be in git repo)
+                }
+            }
+
+            Ok(result)
         }
     }
 }

@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
+    /// Stage verify.lock after successful run (for git hooks)
+    #[arg(long)]
+    pub stage: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -32,6 +36,10 @@ pub enum Commands {
         /// Force run even if cache is fresh
         #[arg(short, long)]
         force: bool,
+
+        /// Stage verify.lock after successful run (for git hooks)
+        #[arg(long)]
+        stage: bool,
     },
 
     /// Show status of all checks
@@ -61,6 +69,7 @@ impl Default for Commands {
         Commands::Run {
             names: vec![],
             force: false,
+            stage: false,
         }
     }
 }
