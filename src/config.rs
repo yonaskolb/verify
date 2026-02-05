@@ -188,6 +188,7 @@ impl Config {
     }
 
     /// Check if a name refers to a subproject
+    #[allow(dead_code)]
     pub fn is_subproject(&self, name: &str) -> bool {
         self.get_subproject(name).is_some()
     }

@@ -363,6 +363,7 @@ impl RunResults {
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_summary(&self) -> RunSummary {
         RunSummary {
             total: self.passed + self.failed + self.skipped,

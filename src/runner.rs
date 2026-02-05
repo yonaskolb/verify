@@ -11,15 +11,14 @@ use crate::ui::{
     finish_pass_with_metadata, Ui,
 };
 use anyhow::Result;
-use rayon::prelude::*;
 use std::collections::HashMap;
-use std::path::Path;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Result of executing a single check
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct CheckExecution {
     pub name: String,
@@ -796,7 +795,6 @@ fn execute_per_file(
     }
 
     let start = Instant::now();
-    let mut total_duration_ms: u64 = 0;
     let mut last_output = String::new();
 
     // Run command for each stale file
@@ -823,7 +821,6 @@ fn execute_per_file(
             &env_vars,
         );
         let file_duration_ms = file_start.elapsed().as_millis() as u64;
-        total_duration_ms += file_duration_ms;
 
         if success {
             // Finish file progress bar as passed
@@ -854,7 +851,7 @@ fn execute_per_file(
             }
 
             // Mark check as failed and stop
-            total_duration_ms = start.elapsed().as_millis() as u64;
+            let total_duration_ms = start.elapsed().as_millis() as u64;
             cache.mark_per_file_failed(&check.name, total_duration_ms);
             executed.insert(check.name.clone(), true);
 
@@ -886,7 +883,7 @@ fn execute_per_file(
     };
 
     // Finalize cache - all files passed
-    total_duration_ms = start.elapsed().as_millis() as u64;
+    let total_duration_ms = start.elapsed().as_millis() as u64;
     cache.finalize_per_file(
         &check.name,
         total_duration_ms,

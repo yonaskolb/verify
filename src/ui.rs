@@ -3,7 +3,7 @@ use crate::metadata::{compute_delta, MetadataValue};
 use crate::output::{format_duration, format_relative_time};
 use chrono::{DateTime, Utc};
 use console::{style, Term};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ pub const ICON_CIRCLE: &str = "\u{25CF}"; // ●
 
 /// Terminal UI helper
 pub struct Ui {
+    #[allow(dead_code)]
     term: Term,
     verbose: bool,
 }
@@ -45,6 +46,7 @@ impl Ui {
     }
 
     /// Print status for a fresh check
+    #[allow(dead_code)]
     pub fn print_status_fresh(&self, name: &str, last_run: &DateTime<Utc>, duration_ms: u64) {
         self.print_status_fresh_indented(name, last_run, duration_ms, 0);
     }
@@ -70,6 +72,7 @@ impl Ui {
     }
 
     /// Print status for a stale check
+    #[allow(dead_code)]
     pub fn print_status_stale(&self, name: &str, reason: &StalenessReason) {
         self.print_status_stale_indented(name, reason, 0);
     }
@@ -103,6 +106,7 @@ impl Ui {
     }
 
     /// Print status for a never-run check
+    #[allow(dead_code)]
     pub fn print_status_never_run(&self, name: &str) {
         self.print_status_never_run_indented(name, 0);
     }
@@ -120,11 +124,13 @@ impl Ui {
     }
 
     /// Print when a check is skipped (cache fresh)
+    #[allow(dead_code)]
     pub fn print_skipped(&self, name: &str) {
         self.print_skipped_indented(name, 0);
     }
 
     /// Print when a check is skipped with indentation
+    #[allow(dead_code)]
     pub fn print_skipped_indented(&self, name: &str, indent: usize) {
         let prefix = Self::indent_str(indent);
         println!(
@@ -137,6 +143,7 @@ impl Ui {
     }
 
     /// Print when a check passes
+    #[allow(dead_code)]
     pub fn print_pass(&self, name: &str, duration_ms: u64) {
         self.print_pass_indented(name, duration_ms, 0);
     }
@@ -154,11 +161,13 @@ impl Ui {
     }
 
     /// Print when a check is cached (fresh)
+    #[allow(dead_code)]
     pub fn print_cached(&self, name: &str) {
         self.print_cached_indented(name, 0);
     }
 
     /// Print when a check is cached with indentation
+    #[allow(dead_code)]
     pub fn print_cached_indented(&self, name: &str, indent: usize) {
         let prefix = Self::indent_str(indent);
         println!(
@@ -189,6 +198,7 @@ impl Ui {
 
 
     /// Print when a check fails
+    #[allow(dead_code)]
     pub fn print_fail(&self, name: &str, duration_ms: u64, output: Option<&str>) {
         self.print_fail_indented(name, duration_ms, output, 0);
     }
@@ -242,11 +252,13 @@ impl Ui {
     }
 
     /// Print wave header
+    #[allow(dead_code)]
     pub fn print_wave_start(&self, names: &[String]) {
         self.print_wave_start_indented(names, 0);
     }
 
     /// Print wave header with indentation
+    #[allow(dead_code)]
     pub fn print_wave_start_indented(&self, names: &[String], indent: usize) {
         let prefix = Self::indent_str(indent);
         if names.len() == 1 {
@@ -292,6 +304,7 @@ impl Ui {
     }
 
     /// Print when all checks are fresh
+    #[allow(dead_code)]
     pub fn print_all_fresh(&self) {
         println!("{}", style("All checks are fresh, nothing to run").green());
     }
@@ -302,6 +315,7 @@ impl Ui {
     }
 
     /// Print hint message
+    #[allow(dead_code)]
     pub fn print_hint(&self, msg: &str) {
         eprintln!("{} {}", style("hint:").yellow(), msg);
     }
@@ -358,6 +372,7 @@ pub fn create_running_indicator(name: &str, indent: usize) -> ProgressBar {
 }
 
 /// Finish a running indicator with pass state (green circle)
+#[allow(dead_code)]
 pub fn finish_pass(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize) {
     let prefix = "    ".repeat(indent);
     pb.set_style(
@@ -400,6 +415,7 @@ pub fn finish_cached(
 }
 
 /// Finish a running indicator with fail state (red circle)
+#[allow(dead_code)]
 pub fn finish_fail(pb: &ProgressBar, name: &str, command: &str, duration_ms: u64, indent: usize) {
     let prefix = "    ".repeat(indent);
     pb.finish_and_clear();

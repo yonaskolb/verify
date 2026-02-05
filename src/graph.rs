@@ -1,5 +1,5 @@
 use crate::config::{Config, Verification};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
@@ -7,6 +7,7 @@ use std::collections::HashMap;
 /// Represents the dependency graph of verifications
 pub struct DependencyGraph {
     graph: DiGraph<String, ()>,
+    #[allow(dead_code)]
     name_to_node: HashMap<String, NodeIndex>,
 }
 
@@ -111,6 +112,7 @@ impl DependencyGraph {
     }
 
     /// Get direct dependencies for a check
+    #[allow(dead_code)]
     pub fn dependencies(&self, name: &str) -> Vec<String> {
         if let Some(&node) = self.name_to_node.get(name) {
             self.graph
@@ -123,6 +125,7 @@ impl DependencyGraph {
     }
 
     /// Get all transitive dependencies for a check (including the check itself)
+    #[allow(dead_code)]
     pub fn transitive_dependencies(&self, name: &str) -> Vec<String> {
         let mut result = vec![name.to_string()];
 
@@ -140,6 +143,7 @@ impl DependencyGraph {
         result
     }
 
+    #[allow(dead_code)]
     fn collect_deps(&self, node: NodeIndex, visited: &mut HashMap<NodeIndex, bool>) {
         if visited.contains_key(&node) {
             return;
@@ -152,6 +156,7 @@ impl DependencyGraph {
     }
 
     /// Get checks that depend on the given check (dependents)
+    #[allow(dead_code)]
     pub fn dependents(&self, name: &str) -> Vec<String> {
         if let Some(&node) = self.name_to_node.get(name) {
             self.graph
@@ -164,6 +169,7 @@ impl DependencyGraph {
     }
 
     /// Filter checks to run, including necessary dependencies
+    #[allow(dead_code)]
     pub fn checks_to_run<'a>(
         &self,
         config: &'a Config,
