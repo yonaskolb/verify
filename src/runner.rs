@@ -770,6 +770,7 @@ fn execute_per_file(
 
     let start = Instant::now();
     let mut last_output = String::new();
+    let mut failed_files: Vec<(String, Option<i32>, String)> = Vec::new();
 
     // Run command for each stale file
     for file_path in &stale_files {
@@ -826,28 +827,40 @@ fn execute_per_file(
                 ui.print_fail_output(Some(&output), indent);
             }
 
-            // Mark check as failed and stop
-            let total_duration_ms = start.elapsed().as_millis() as u64;
-            cache.mark_per_file_failed(&check.name, &config_hash);
-            executed.insert(check.name.clone(), true);
-
-            let empty_metadata = HashMap::new();
-            results.add_fail(
-                &check.name,
-                total_duration_ms,
-                exit_code,
-                Some(output),
-                &empty_metadata,
-                prev_metadata.as_ref(),
-            );
-
-            // Save cache immediately after per_file check fails
-            cache.save(project_root)?;
-
-            return Ok(());
+            // Track the failure but continue processing other files
+            failed_files.push((file_path.clone(), exit_code, output.clone()));
         }
 
         last_output = output;
+    }
+
+    // If any files failed, mark check as failed
+    if !failed_files.is_empty() {
+        let total_duration_ms = start.elapsed().as_millis() as u64;
+        cache.mark_per_file_failed(&check.name, &config_hash);
+        executed.insert(check.name.clone(), true);
+
+        // Combine all failure outputs
+        let combined_output = failed_files
+            .iter()
+            .map(|(file, _, output)| format!("=== {} ===\n{}", file, output))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let empty_metadata = HashMap::new();
+        results.add_fail(
+            &check.name,
+            total_duration_ms,
+            failed_files.first().and_then(|(_, code, _)| *code),
+            Some(combined_output),
+            &empty_metadata,
+            prev_metadata.as_ref(),
+        );
+
+        // Save cache immediately after per_file check fails
+        cache.save(project_root)?;
+
+        return Ok(());
     }
 
     // Extract metadata from last output (if configured)
