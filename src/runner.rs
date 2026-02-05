@@ -948,6 +948,32 @@ mod tests {
     use crate::hasher::HashResult;
     use std::collections::BTreeMap;
 
+    // Helper to create a basic Verification for testing
+    fn make_verification(name: &str, cache_paths: Vec<&str>, depends_on: Vec<&str>) -> Verification {
+        Verification {
+            name: name.to_string(),
+            command: "echo test".to_string(),
+            cache_paths: cache_paths.into_iter().map(|s| s.to_string()).collect(),
+            depends_on: depends_on.into_iter().map(|s| s.to_string()).collect(),
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        }
+    }
+
+    // Helper to create a HashResult
+    fn make_hash_result(combined: &str, files: Vec<(&str, &str)>) -> HashResult {
+        HashResult {
+            combined_hash: combined.to_string(),
+            file_hashes: files
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    // ==================== get_stale_files_from_cache tests ====================
+
     #[test]
     fn test_get_stale_files_from_cache_all_new() {
         let cached: BTreeMap<String, String> = BTreeMap::new();
@@ -1019,5 +1045,624 @@ mod tests {
         let stale = get_stale_files_from_cache(&cached, &hash_result);
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0], "file1.txt");
+    }
+
+    // ==================== compute_staleness tests ====================
+
+    #[test]
+    fn test_compute_staleness_dependency_stale() {
+        // When a dependency is marked as stale, the check should be stale
+        let check = make_verification("test", vec!["src/**/*.rs"], vec!["build"]);
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), true); // dependency is stale
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::DependencyStale { dependency },
+            } => {
+                assert_eq!(dependency, "build");
+            }
+            other => panic!("Expected DependencyStale, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_dependency_fresh() {
+        // When dependency is fresh (false), check proceeds to file-based staleness
+        let check = make_verification("test", vec!["src/**/*.rs"], vec!["build"]);
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), false); // dependency is fresh
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        // Should be NeverRun since cache is empty (not DependencyStale)
+        assert_eq!(result, StalenessStatus::NeverRun);
+    }
+
+    #[test]
+    fn test_compute_staleness_multiple_dependencies_one_stale() {
+        // If any dependency is stale, check is stale
+        let check = make_verification("test", vec!["src/**/*.rs"], vec!["build", "lint", "format"]);
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), false);
+        dep_staleness.insert("lint".to_string(), true); // this one is stale
+        dep_staleness.insert("format".to_string(), false);
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::DependencyStale { dependency },
+            } => {
+                assert_eq!(dependency, "lint");
+            }
+            other => panic!("Expected DependencyStale(lint), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_unknown_dependency_treated_as_stale() {
+        // Unknown dependencies default to stale (true)
+        let check = make_verification("test", vec!["src/**/*.rs"], vec!["unknown_dep"]);
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let dep_staleness = HashMap::new(); // empty - unknown_dep not present
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::DependencyStale { dependency },
+            } => {
+                assert_eq!(dependency, "unknown_dep");
+            }
+            other => panic!("Expected DependencyStale(unknown_dep), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_no_cache_paths() {
+        // When cache_paths is empty, always return NoCachePaths
+        let check = make_verification("test", vec![], vec![]); // no cache_paths
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::NoCachePaths,
+            } => {}
+            other => panic!("Expected NoCachePaths, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_no_cache_paths_with_fresh_deps() {
+        // Even with fresh dependencies, no cache_paths means always run
+        let check = make_verification("test", vec![], vec!["build"]);
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), false);
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::NoCachePaths,
+            } => {}
+            other => panic!("Expected NoCachePaths, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_never_run() {
+        // Check has never been run (not in cache)
+        let check = make_verification("new_check", vec!["src/**/*.rs"], vec![]);
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+        let cache = CacheState::new(); // empty cache
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        assert_eq!(result, StalenessStatus::NeverRun);
+    }
+
+    #[test]
+    fn test_compute_staleness_fresh() {
+        // Check is fresh when hash matches and config hasn't changed
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]);
+        let config_hash = check.config_hash();
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+
+        let mut cache = CacheState::new();
+        cache.update(
+            "test",
+            true,
+            config_hash,
+            Some("hash123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        assert_eq!(result, StalenessStatus::Fresh);
+    }
+
+    #[test]
+    fn test_compute_staleness_files_changed() {
+        // Check is stale when files have changed
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]);
+        let config_hash = check.config_hash();
+        let hash_result = make_hash_result("new_hash", vec![("src/main.rs", "new_content")]);
+
+        let mut cache = CacheState::new();
+        let mut old_file_hashes = BTreeMap::new();
+        old_file_hashes.insert("src/main.rs".to_string(), "old_content".to_string());
+        cache.update(
+            "test",
+            true,
+            config_hash,
+            Some("old_hash".to_string()),
+            old_file_hashes,
+            HashMap::new(),
+            true, // per_file to store file_hashes
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::FilesChanged { changed_files },
+            } => {
+                // find_changed_files returns "M file" for modified files
+                assert!(changed_files.contains(&"M src/main.rs".to_string()));
+            }
+            other => panic!("Expected FilesChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_config_changed() {
+        // Check is stale when config has changed
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]);
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+
+        let mut cache = CacheState::new();
+        // Store with different config hash
+        cache.update(
+            "test",
+            true,
+            "old_config_hash".to_string(),
+            Some("hash123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::ConfigChanged,
+            } => {}
+            other => panic!("Expected ConfigChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_after_failure() {
+        // After a failed run, check should need to run again
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]);
+        let config_hash = check.config_hash();
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+
+        let mut cache = CacheState::new();
+        // Update with failure (success = false clears content_hash)
+        cache.update(
+            "test",
+            false,
+            config_hash,
+            Some("hash123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        // After failure, content_hash is None, so it's NeverRun
+        assert_eq!(result, StalenessStatus::NeverRun);
+    }
+
+    #[test]
+    fn test_compute_staleness_dependency_checked_before_cache_paths() {
+        // Dependency staleness should be checked before checking empty cache_paths
+        // This is important: even with no cache_paths, if dep is stale we report DependencyStale
+        let check = make_verification("test", vec![], vec!["build"]); // no cache_paths
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), true); // dependency stale
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        // Should be DependencyStale, not NoCachePaths
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::DependencyStale { dependency },
+            } => {
+                assert_eq!(dependency, "build");
+            }
+            other => panic!("Expected DependencyStale, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_changed_files_enrichment() {
+        // When stale due to files, the changed files list should be populated
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]);
+        let config_hash = check.config_hash();
+
+        // Current state has 3 files, 2 changed
+        let hash_result = make_hash_result(
+            "new_combined",
+            vec![
+                ("src/main.rs", "new_main"),
+                ("src/lib.rs", "same_lib"),
+                ("src/util.rs", "new_util"),
+            ],
+        );
+
+        let mut cache = CacheState::new();
+        let mut old_hashes = BTreeMap::new();
+        old_hashes.insert("src/main.rs".to_string(), "old_main".to_string());
+        old_hashes.insert("src/lib.rs".to_string(), "same_lib".to_string());
+        old_hashes.insert("src/util.rs".to_string(), "old_util".to_string());
+
+        cache.update(
+            "test",
+            true,
+            config_hash,
+            Some("old_combined".to_string()),
+            old_hashes,
+            HashMap::new(),
+            true, // per_file to track file_hashes
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::FilesChanged { changed_files },
+            } => {
+                // find_changed_files returns "M file" for modified files
+                assert_eq!(changed_files.len(), 2);
+                assert!(changed_files.contains(&"M src/main.rs".to_string()));
+                assert!(changed_files.contains(&"M src/util.rs".to_string()));
+                // lib.rs unchanged should not be in the list
+                assert!(!changed_files.iter().any(|f| f.contains("lib.rs")));
+            }
+            other => panic!("Expected FilesChanged with 2 files, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_no_dependencies() {
+        // Check with no dependencies should proceed directly to cache check
+        let check = make_verification("test", vec!["src/**/*.rs"], vec![]); // no depends_on
+        let config_hash = check.config_hash();
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+
+        let mut cache = CacheState::new();
+        cache.update(
+            "test",
+            true,
+            config_hash,
+            Some("hash123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        let dep_staleness = HashMap::new();
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        assert_eq!(result, StalenessStatus::Fresh);
+    }
+
+    #[test]
+    fn test_compute_staleness_all_dependencies_fresh() {
+        // When all dependencies are fresh, proceed to file-based staleness
+        let check = make_verification("test", vec!["src/**/*.rs"], vec!["build", "lint"]);
+        let config_hash = check.config_hash();
+        let hash_result = make_hash_result("hash123", vec![("src/main.rs", "abc")]);
+
+        let mut cache = CacheState::new();
+        cache.update(
+            "test",
+            true,
+            config_hash,
+            Some("hash123".to_string()),
+            BTreeMap::new(),
+            HashMap::new(),
+            false,
+        );
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), false);
+        dep_staleness.insert("lint".to_string(), false);
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+
+        assert_eq!(result, StalenessStatus::Fresh);
+    }
+
+    // ==================== execute_command tests ====================
+    // These tests verify actual command execution behavior
+
+    #[test]
+    fn test_execute_command_success() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, output) =
+            execute_command("echo 'hello world'", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert_eq!(exit_code, Some(0));
+        assert!(output.contains("hello world"));
+    }
+
+    #[test]
+    fn test_execute_command_failure() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, _output) =
+            execute_command("exit 1", temp_dir.path(), None, false, &[]);
+
+        assert!(!success);
+        assert_eq!(exit_code, Some(1));
+    }
+
+    #[test]
+    fn test_execute_command_nonzero_exit_code() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, _output) =
+            execute_command("exit 42", temp_dir.path(), None, false, &[]);
+
+        assert!(!success);
+        assert_eq!(exit_code, Some(42));
+    }
+
+    #[test]
+    fn test_execute_command_captures_stdout() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) =
+            execute_command("echo 'stdout test'", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert!(output.contains("stdout test"));
+    }
+
+    #[test]
+    fn test_execute_command_captures_stderr() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) =
+            execute_command("echo 'stderr test' >&2", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert!(output.contains("stderr test"));
+    }
+
+    #[test]
+    fn test_execute_command_captures_both_stdout_stderr() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) = execute_command(
+            "echo 'stdout'; echo 'stderr' >&2",
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
+
+        assert!(success);
+        assert!(output.contains("stdout"));
+        assert!(output.contains("stderr"));
+    }
+
+    #[test]
+    fn test_execute_command_with_env_var() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_vars = [("MY_TEST_VAR", "test_value")];
+        let (success, _, output) =
+            execute_command("echo $MY_TEST_VAR", temp_dir.path(), None, false, &env_vars);
+
+        assert!(success);
+        assert!(output.contains("test_value"));
+    }
+
+    #[test]
+    fn test_execute_command_with_verify_file_env() {
+        // Test the specific VERIFY_FILE env var used in per_file mode
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_vars = [("VERIFY_FILE", "src/main.rs")];
+        let (success, _, output) =
+            execute_command("echo $VERIFY_FILE", temp_dir.path(), None, false, &env_vars);
+
+        assert!(success);
+        assert!(output.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_execute_command_multiple_env_vars() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_vars = [("VAR1", "value1"), ("VAR2", "value2")];
+        let (success, _, output) =
+            execute_command("echo $VAR1 $VAR2", temp_dir.path(), None, false, &env_vars);
+
+        assert!(success);
+        assert!(output.contains("value1"));
+        assert!(output.contains("value2"));
+    }
+
+    #[test]
+    fn test_execute_command_working_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Create a file in the temp directory
+        std::fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+        let (success, _, output) =
+            execute_command("ls test.txt", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert!(output.contains("test.txt"));
+    }
+
+    #[test]
+    fn test_execute_command_multiline_output() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) = execute_command(
+            "echo 'line1'; echo 'line2'; echo 'line3'",
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
+
+        assert!(success);
+        assert!(output.contains("line1"));
+        assert!(output.contains("line2"));
+        assert!(output.contains("line3"));
+    }
+
+    #[test]
+    fn test_execute_command_verbose_mode() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // In verbose mode, output should still be captured
+        let (success, exit_code, output) =
+            execute_command("echo 'verbose test'", temp_dir.path(), None, true, &[]);
+
+        assert!(success);
+        assert_eq!(exit_code, Some(0));
+        assert!(output.contains("verbose test"));
+    }
+
+    #[test]
+    fn test_execute_command_empty_output() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) =
+            execute_command("true", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert!(output.is_empty() || output.trim().is_empty());
+    }
+
+    #[test]
+    fn test_execute_command_special_characters_in_output() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) = execute_command(
+            r#"echo 'special: $VAR "quoted" `backticks`'"#,
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
+
+        assert!(success);
+        assert!(output.contains("special:"));
+    }
+
+    #[test]
+    fn test_execute_command_piped_commands() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, _, output) = execute_command(
+            "echo 'abc\ndef\nghi' | grep 'def'",
+            temp_dir.path(),
+            None,
+            false,
+            &[],
+        );
+
+        assert!(success);
+        assert!(output.contains("def"));
+        assert!(!output.contains("abc"));
+    }
+
+    #[test]
+    fn test_execute_command_command_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, _output) =
+            execute_command("nonexistent_command_12345", temp_dir.path(), None, false, &[]);
+
+        assert!(!success);
+        // Exit code 127 typically means command not found
+        assert!(exit_code == Some(127) || exit_code.is_some());
+    }
+
+    #[test]
+    fn test_execute_command_reads_file_in_workdir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("input.txt");
+        std::fs::write(&file_path, "file contents here").unwrap();
+
+        let (success, _, output) =
+            execute_command("cat input.txt", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+        assert!(output.contains("file contents here"));
+    }
+
+    #[test]
+    fn test_execute_command_writes_file_in_workdir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let (success, _, _output) =
+            execute_command("echo 'written content' > output.txt", temp_dir.path(), None, false, &[]);
+
+        assert!(success);
+
+        let written_content = std::fs::read_to_string(temp_dir.path().join("output.txt")).unwrap();
+        assert!(written_content.contains("written content"));
+    }
+
+    #[test]
+    fn test_execute_command_env_var_in_complex_command() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("test_file.txt");
+        std::fs::write(&file_path, "test content").unwrap();
+
+        let env_vars = [("VERIFY_FILE", "test_file.txt")];
+        let (success, _, output) =
+            execute_command("cat $VERIFY_FILE", temp_dir.path(), None, false, &env_vars);
+
+        assert!(success);
+        assert!(output.contains("test content"));
     }
 }

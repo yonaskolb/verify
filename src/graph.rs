@@ -222,6 +222,8 @@ mod tests {
         }
     }
 
+    // ==================== execution_waves tests ====================
+
     #[test]
     fn test_no_dependencies() {
         let config = make_config(vec![("a", vec![]), ("b", vec![]), ("c", vec![])]);
@@ -279,5 +281,249 @@ mod tests {
         assert!(deps.contains(&"a".to_string()));
         assert!(deps.contains(&"b".to_string()));
         assert!(deps.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_single_node() {
+        let config = make_config(vec![("only", vec![])]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let waves = graph.execution_waves();
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0], vec!["only"]);
+    }
+
+    #[test]
+    fn test_empty_graph() {
+        let config = make_config(vec![]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let waves = graph.execution_waves();
+        assert!(waves.is_empty());
+    }
+
+    #[test]
+    fn test_two_independent_chains() {
+        // Two separate dependency chains that can run in parallel
+        // Chain 1: a -> b -> c
+        // Chain 2: x -> y -> z
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec!["a"]),
+            ("c", vec!["b"]),
+            ("x", vec![]),
+            ("y", vec!["x"]),
+            ("z", vec!["y"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let waves = graph.execution_waves();
+        assert_eq!(waves.len(), 3);
+
+        // Wave 1: a and x (both roots)
+        assert_eq!(waves[0].len(), 2);
+        assert!(waves[0].contains(&"a".to_string()));
+        assert!(waves[0].contains(&"x".to_string()));
+
+        // Wave 2: b and y
+        assert_eq!(waves[1].len(), 2);
+        assert!(waves[1].contains(&"b".to_string()));
+        assert!(waves[1].contains(&"y".to_string()));
+
+        // Wave 3: c and z
+        assert_eq!(waves[2].len(), 2);
+        assert!(waves[2].contains(&"c".to_string()));
+        assert!(waves[2].contains(&"z".to_string()));
+    }
+
+    #[test]
+    fn test_wide_parallel_then_converge() {
+        // Multiple independent checks converging to one final check
+        // a, b, c, d all independent -> final depends on all
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec![]),
+            ("c", vec![]),
+            ("d", vec![]),
+            ("final", vec!["a", "b", "c", "d"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let waves = graph.execution_waves();
+        assert_eq!(waves.len(), 2);
+
+        // Wave 1: all independent checks
+        assert_eq!(waves[0].len(), 4);
+        assert!(waves[0].contains(&"a".to_string()));
+        assert!(waves[0].contains(&"b".to_string()));
+        assert!(waves[0].contains(&"c".to_string()));
+        assert!(waves[0].contains(&"d".to_string()));
+
+        // Wave 2: final
+        assert_eq!(waves[1].len(), 1);
+        assert_eq!(waves[1][0], "final");
+    }
+
+    #[test]
+    fn test_complex_dag() {
+        // Complex DAG:
+        //     a
+        //    / \
+        //   b   c
+        //   |\ /|
+        //   | X |
+        //   |/ \|
+        //   d   e
+        //    \ /
+        //     f
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec!["a"]),
+            ("c", vec!["a"]),
+            ("d", vec!["b", "c"]),
+            ("e", vec!["b", "c"]),
+            ("f", vec!["d", "e"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let waves = graph.execution_waves();
+        assert_eq!(waves.len(), 4);
+
+        assert_eq!(waves[0], vec!["a"]);
+
+        assert_eq!(waves[1].len(), 2);
+        assert!(waves[1].contains(&"b".to_string()));
+        assert!(waves[1].contains(&"c".to_string()));
+
+        assert_eq!(waves[2].len(), 2);
+        assert!(waves[2].contains(&"d".to_string()));
+        assert!(waves[2].contains(&"e".to_string()));
+
+        assert_eq!(waves[3], vec!["f"]);
+    }
+
+    #[test]
+    fn test_three_node_cycle() {
+        let config = make_config(vec![
+            ("a", vec!["c"]),
+            ("b", vec!["a"]),
+            ("c", vec!["b"]),
+        ]);
+        let result = DependencyGraph::from_config(&config);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("Circular dependency"));
+    }
+
+    #[test]
+    fn test_self_referencing_node() {
+        // A node depending on itself - should be caught as a cycle
+        let config = make_config(vec![("a", vec!["a"])]);
+        let result = DependencyGraph::from_config(&config);
+        assert!(result.is_err());
+    }
+
+    // ==================== dependencies/dependents tests ====================
+
+    #[test]
+    fn test_dependencies_direct() {
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec![]),
+            ("c", vec!["a", "b"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.dependencies("c");
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&"a".to_string()));
+        assert!(deps.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_dependencies_none() {
+        let config = make_config(vec![("a", vec![]), ("b", vec![])]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.dependencies("a");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_dependencies_unknown_node() {
+        let config = make_config(vec![("a", vec![])]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.dependencies("nonexistent");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_dependents_direct() {
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec!["a"]),
+            ("c", vec!["a"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let dependents = graph.dependents("a");
+        assert_eq!(dependents.len(), 2);
+        assert!(dependents.contains(&"b".to_string()));
+        assert!(dependents.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_dependents_none() {
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec!["a"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        // b has no dependents (it's a leaf)
+        let dependents = graph.dependents("b");
+        assert!(dependents.is_empty());
+    }
+
+    #[test]
+    fn test_transitive_dependencies_single_node() {
+        let config = make_config(vec![("a", vec![])]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.transitive_dependencies("a");
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn test_transitive_dependencies_deep_chain() {
+        let config = make_config(vec![
+            ("a", vec![]),
+            ("b", vec!["a"]),
+            ("c", vec!["b"]),
+            ("d", vec!["c"]),
+            ("e", vec!["d"]),
+        ]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.transitive_dependencies("e");
+        assert_eq!(deps.len(), 5);
+        assert!(deps.contains(&"a".to_string()));
+        assert!(deps.contains(&"b".to_string()));
+        assert!(deps.contains(&"c".to_string()));
+        assert!(deps.contains(&"d".to_string()));
+        assert!(deps.contains(&"e".to_string()));
+    }
+
+    #[test]
+    fn test_transitive_dependencies_unknown_node() {
+        let config = make_config(vec![("a", vec![])]);
+        let graph = DependencyGraph::from_config(&config).unwrap();
+
+        let deps = graph.transitive_dependencies("nonexistent");
+        // Should return just the requested name even if not found
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&"nonexistent".to_string()));
     }
 }

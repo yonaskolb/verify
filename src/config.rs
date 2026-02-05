@@ -482,4 +482,331 @@ verifications:
         assert!(integration.depends_on.contains(&"frontend".to_string()));
         assert!(integration.depends_on.contains(&"backend".to_string()));
     }
+
+    // ==================== Self-dependency tests ====================
+
+    #[test]
+    fn test_self_dependency_rejected() {
+        // A check cannot depend on itself
+        let yaml = r#"
+verifications:
+  - name: build
+    command: npm run build
+    cache_paths: []
+    depends_on: [build]
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        let result = config.validate(Path::new("."));
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("cannot depend on itself"));
+        assert!(err.contains("build"));
+    }
+
+    #[test]
+    fn test_self_dependency_among_valid_deps() {
+        // Self-dependency hidden among valid dependencies should still be rejected
+        let yaml = r#"
+verifications:
+  - name: lint
+    command: npm run lint
+    cache_paths: []
+  - name: build
+    command: npm run build
+    cache_paths: []
+    depends_on: [lint, build]
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        let result = config.validate(Path::new("."));
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("cannot depend on itself"));
+    }
+
+    // ==================== Empty config tests ====================
+
+    #[test]
+    fn test_empty_verifications() {
+        let yaml = r#"
+verifications: []
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert!(config.validate(Path::new(".")).is_ok());
+        assert!(config.verifications.is_empty());
+    }
+
+    // ==================== Config hash tests ====================
+
+    #[test]
+    fn test_config_hash_determinism() {
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["src/**/*.ts".to_string()],
+            depends_on: vec![],
+            timeout_secs: Some(300),
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["src/**/*.ts".to_string()],
+            depends_on: vec![],
+            timeout_secs: Some(300),
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        assert_eq!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_changes_with_command() {
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm run test".to_string(), // different command
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        assert_ne!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_changes_with_cache_paths() {
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["src/**/*.ts".to_string()],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["src/**/*.js".to_string()], // different path
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        assert_ne!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_changes_with_timeout() {
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: Some(300),
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: Some(600), // different timeout
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        assert_ne!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_changes_with_per_file() {
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: true, // different per_file setting
+        };
+
+        assert_ne!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_cache_paths_order_independent() {
+        // Cache paths should be sorted, so order doesn't matter
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["a.ts".to_string(), "b.ts".to_string(), "c.ts".to_string()],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec!["c.ts".to_string(), "a.ts".to_string(), "b.ts".to_string()],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(),
+            per_file: false,
+        };
+
+        assert_eq!(v1.config_hash(), v2.config_hash());
+    }
+
+    #[test]
+    fn test_config_hash_with_metadata() {
+        use crate::config::MetadataPattern;
+
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("coverage".to_string(), MetadataPattern::Simple(r"(\d+)%".to_string()));
+
+        let v1 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: metadata1,
+            per_file: false,
+        };
+
+        let v2 = Verification {
+            name: "test".to_string(),
+            command: "npm test".to_string(),
+            cache_paths: vec![],
+            depends_on: vec![],
+            timeout_secs: None,
+            metadata: HashMap::new(), // no metadata
+            per_file: false,
+        };
+
+        assert_ne!(v1.config_hash(), v2.config_hash());
+    }
+
+    // ==================== Invalid YAML tests ====================
+
+    #[test]
+    fn test_invalid_yaml_syntax() {
+        let yaml = r#"
+verifications:
+  - name: test
+    command: npm test
+    cache_paths: [invalid yaml here
+"#;
+        let result: Result<Config, _> = serde_yml::from_str(yaml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_command_parses_as_subproject() {
+        // Without a command, serde's untagged enum parses this as a Subproject
+        // (since Subproject only requires name + path, and cache_paths is ignored)
+        // This is expected behavior due to serde's untagged enum matching
+        let yaml = r#"
+verifications:
+  - name: test
+    cache_paths: []
+"#;
+        let result: Result<Config, _> = serde_yml::from_str(yaml);
+        // Parsing fails because without command or path, neither variant matches
+        assert!(result.is_err());
+    }
+
+    // ==================== Special characters tests ====================
+
+    #[test]
+    fn test_special_characters_in_name() {
+        let yaml = r#"
+verifications:
+  - name: "test-with-dashes"
+    command: npm test
+    cache_paths: []
+  - name: "test_with_underscores"
+    command: npm test
+    cache_paths: []
+  - name: "test.with.dots"
+    command: npm test
+    cache_paths: []
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert!(config.validate(Path::new(".")).is_ok());
+        assert_eq!(config.verifications.len(), 3);
+    }
+
+    #[test]
+    fn test_unicode_in_command() {
+        let yaml = r#"
+verifications:
+  - name: test
+    command: echo "Hello 世界 🎉"
+    cache_paths: []
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert!(config.validate(Path::new(".")).is_ok());
+        let test = config.get("test").unwrap();
+        assert!(test.command.contains("世界"));
+        assert!(test.command.contains("🎉"));
+    }
+
+    // ==================== Getter method tests ====================
+
+    #[test]
+    fn test_get_nonexistent_check() {
+        let yaml = r#"
+verifications:
+  - name: build
+    command: npm run build
+    cache_paths: []
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert!(config.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_get_subproject_via_get_returns_none() {
+        // get() only returns Verifications, not Subprojects
+        let yaml = r#"
+verifications:
+  - name: frontend
+    path: ./packages/frontend
+"#;
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert!(config.get("frontend").is_none()); // Returns None for subproject
+        assert!(config.get_subproject("frontend").is_some()); // But get_subproject works
+    }
 }

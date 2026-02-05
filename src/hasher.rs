@@ -121,6 +121,8 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    // ==================== hash_file tests ====================
+
     #[test]
     fn test_hash_determinism() {
         let dir = tempdir().unwrap();
@@ -132,6 +134,50 @@ mod tests {
 
         assert_eq!(hash1, hash2);
     }
+
+    #[test]
+    fn test_hash_different_content_different_hash() {
+        let dir = tempdir().unwrap();
+        let file1 = dir.path().join("file1.txt");
+        let file2 = dir.path().join("file2.txt");
+
+        fs::write(&file1, "hello").unwrap();
+        fs::write(&file2, "world").unwrap();
+
+        let hash1 = hash_file(&file1).unwrap();
+        let hash2 = hash_file(&file2).unwrap();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_empty_file() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("empty.txt");
+        fs::write(&file_path, "").unwrap();
+
+        let hash = hash_file(&file_path).unwrap();
+        // Empty file should still produce a valid hash
+        assert!(!hash.is_empty());
+        assert_eq!(hash.len(), 64); // BLAKE3 produces 256-bit (64 hex chars) hash
+    }
+
+    #[test]
+    fn test_hash_same_content_same_hash() {
+        let dir = tempdir().unwrap();
+        let file1 = dir.path().join("file1.txt");
+        let file2 = dir.path().join("file2.txt");
+
+        fs::write(&file1, "identical content").unwrap();
+        fs::write(&file2, "identical content").unwrap();
+
+        let hash1 = hash_file(&file1).unwrap();
+        let hash2 = hash_file(&file2).unwrap();
+
+        assert_eq!(hash1, hash2);
+    }
+
+    // ==================== find_changed_files tests ====================
 
     #[test]
     fn test_find_changed_files() {
@@ -147,5 +193,216 @@ mod tests {
         assert!(changed.contains(&"+ c.txt".to_string())); // Added
         assert!(changed.contains(&"- b.txt".to_string())); // Deleted
         assert!(changed.contains(&"M a.txt".to_string())); // Modified
+    }
+
+    #[test]
+    fn test_find_changed_files_only_added() {
+        let old: BTreeMap<String, String> = BTreeMap::new();
+
+        let mut new = BTreeMap::new();
+        new.insert("a.txt".to_string(), "hash1".to_string());
+        new.insert("b.txt".to_string(), "hash2".to_string());
+
+        let changed = find_changed_files(&old, &new);
+        assert_eq!(changed.len(), 2);
+        assert!(changed.contains(&"+ a.txt".to_string()));
+        assert!(changed.contains(&"+ b.txt".to_string()));
+    }
+
+    #[test]
+    fn test_find_changed_files_only_deleted() {
+        let mut old = BTreeMap::new();
+        old.insert("a.txt".to_string(), "hash1".to_string());
+        old.insert("b.txt".to_string(), "hash2".to_string());
+
+        let new: BTreeMap<String, String> = BTreeMap::new();
+
+        let changed = find_changed_files(&old, &new);
+        assert_eq!(changed.len(), 2);
+        assert!(changed.contains(&"- a.txt".to_string()));
+        assert!(changed.contains(&"- b.txt".to_string()));
+    }
+
+    #[test]
+    fn test_find_changed_files_only_modified() {
+        let mut old = BTreeMap::new();
+        old.insert("a.txt".to_string(), "old_hash".to_string());
+
+        let mut new = BTreeMap::new();
+        new.insert("a.txt".to_string(), "new_hash".to_string());
+
+        let changed = find_changed_files(&old, &new);
+        assert_eq!(changed.len(), 1);
+        assert!(changed.contains(&"M a.txt".to_string()));
+    }
+
+    #[test]
+    fn test_find_changed_files_no_changes() {
+        let mut old = BTreeMap::new();
+        old.insert("a.txt".to_string(), "hash1".to_string());
+        old.insert("b.txt".to_string(), "hash2".to_string());
+
+        let mut new = BTreeMap::new();
+        new.insert("a.txt".to_string(), "hash1".to_string());
+        new.insert("b.txt".to_string(), "hash2".to_string());
+
+        let changed = find_changed_files(&old, &new);
+        assert!(changed.is_empty());
+    }
+
+    #[test]
+    fn test_find_changed_files_both_empty() {
+        let old: BTreeMap<String, String> = BTreeMap::new();
+        let new: BTreeMap<String, String> = BTreeMap::new();
+
+        let changed = find_changed_files(&old, &new);
+        assert!(changed.is_empty());
+    }
+
+    #[test]
+    fn test_find_changed_files_sorted_output() {
+        let mut old = BTreeMap::new();
+        old.insert("z.txt".to_string(), "hash1".to_string());
+
+        let mut new = BTreeMap::new();
+        new.insert("a.txt".to_string(), "hash2".to_string());
+        new.insert("m.txt".to_string(), "hash3".to_string());
+
+        let changed = find_changed_files(&old, &new);
+        // Output should be sorted: "- z.txt", "+ a.txt", "+ m.txt"
+        assert_eq!(changed.len(), 3);
+        assert_eq!(changed[0], "+ a.txt");
+        assert_eq!(changed[1], "+ m.txt");
+        assert_eq!(changed[2], "- z.txt");
+    }
+
+    // ==================== compute_check_hash tests ====================
+
+    #[test]
+    fn test_compute_check_hash_empty_patterns() {
+        let dir = tempdir().unwrap();
+
+        let result = compute_check_hash(dir.path(), &[]).unwrap();
+        assert!(result.file_hashes.is_empty());
+        // Combined hash of nothing should still be deterministic
+        assert!(!result.combined_hash.is_empty());
+    }
+
+    #[test]
+    fn test_compute_check_hash_single_file() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = compute_check_hash(dir.path(), &["test.txt".to_string()]).unwrap();
+        assert_eq!(result.file_hashes.len(), 1);
+        assert!(result.file_hashes.contains_key("test.txt"));
+    }
+
+    #[test]
+    fn test_compute_check_hash_glob_pattern() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.rs"), "fn a() {}").unwrap();
+        fs::write(dir.path().join("b.rs"), "fn b() {}").unwrap();
+        fs::write(dir.path().join("c.txt"), "text file").unwrap();
+
+        let result = compute_check_hash(dir.path(), &["*.rs".to_string()]).unwrap();
+        assert_eq!(result.file_hashes.len(), 2);
+        assert!(result.file_hashes.contains_key("a.rs"));
+        assert!(result.file_hashes.contains_key("b.rs"));
+        assert!(!result.file_hashes.contains_key("c.txt"));
+    }
+
+    #[test]
+    fn test_compute_check_hash_overlapping_patterns() {
+        // When patterns overlap, files should only be hashed once
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("test.rs"), "content").unwrap();
+
+        let result = compute_check_hash(
+            dir.path(),
+            &["*.rs".to_string(), "test.rs".to_string()],
+        ).unwrap();
+
+        // Should only have one entry despite matching both patterns
+        assert_eq!(result.file_hashes.len(), 1);
+    }
+
+    #[test]
+    fn test_compute_check_hash_determinism() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "aaa").unwrap();
+        fs::write(dir.path().join("b.txt"), "bbb").unwrap();
+
+        let result1 = compute_check_hash(dir.path(), &["*.txt".to_string()]).unwrap();
+        let result2 = compute_check_hash(dir.path(), &["*.txt".to_string()]).unwrap();
+
+        assert_eq!(result1.combined_hash, result2.combined_hash);
+        assert_eq!(result1.file_hashes, result2.file_hashes);
+    }
+
+    #[test]
+    fn test_compute_check_hash_includes_path_in_combined() {
+        // Renaming a file should change the combined hash even if content is same
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "content").unwrap();
+
+        let result1 = compute_check_hash(dir.path(), &["a.txt".to_string()]).unwrap();
+
+        // Remove and create with different name
+        fs::remove_file(dir.path().join("a.txt")).unwrap();
+        fs::write(dir.path().join("b.txt"), "content").unwrap();
+
+        let result2 = compute_check_hash(dir.path(), &["b.txt".to_string()]).unwrap();
+
+        // Individual file hashes should be the same (same content)
+        let hash1 = result1.file_hashes.get("a.txt").unwrap();
+        let hash2 = result2.file_hashes.get("b.txt").unwrap();
+        assert_eq!(hash1, hash2);
+
+        // But combined hashes should differ (path is included)
+        assert_ne!(result1.combined_hash, result2.combined_hash);
+    }
+
+    #[test]
+    fn test_compute_check_hash_nested_directories() {
+        let dir = tempdir().unwrap();
+        let sub_dir = dir.path().join("src");
+        fs::create_dir(&sub_dir).unwrap();
+        fs::write(sub_dir.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(sub_dir.join("lib.rs"), "pub fn lib() {}").unwrap();
+
+        let result = compute_check_hash(dir.path(), &["src/*.rs".to_string()]).unwrap();
+        assert_eq!(result.file_hashes.len(), 2);
+        assert!(result.file_hashes.contains_key("src/main.rs"));
+        assert!(result.file_hashes.contains_key("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_compute_check_hash_no_matching_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("test.txt"), "content").unwrap();
+
+        // Pattern that matches nothing
+        let result = compute_check_hash(dir.path(), &["*.rs".to_string()]).unwrap();
+        assert!(result.file_hashes.is_empty());
+    }
+
+    #[test]
+    fn test_compute_check_hash_multiple_patterns() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("code.rs"), "rust").unwrap();
+        fs::write(dir.path().join("code.ts"), "typescript").unwrap();
+        fs::write(dir.path().join("readme.md"), "docs").unwrap();
+
+        let result = compute_check_hash(
+            dir.path(),
+            &["*.rs".to_string(), "*.ts".to_string()],
+        ).unwrap();
+
+        assert_eq!(result.file_hashes.len(), 2);
+        assert!(result.file_hashes.contains_key("code.rs"));
+        assert!(result.file_hashes.contains_key("code.ts"));
+        assert!(!result.file_hashes.contains_key("readme.md"));
     }
 }
