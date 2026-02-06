@@ -14,18 +14,27 @@ pub struct Ui {
     #[allow(dead_code)]
     term: Term,
     verbose: bool,
+    is_tty: bool,
 }
 
 impl Ui {
     pub fn new(verbose: bool) -> Self {
+        let term = Term::stderr();
+        let is_tty = term.is_term();
         Self {
-            term: Term::stderr(),
+            term,
             verbose,
+            is_tty,
         }
     }
 
     pub fn is_verbose(&self) -> bool {
         self.verbose
+    }
+
+    /// Returns true if we should use progress bars (TTY and not verbose)
+    pub fn use_progress_bars(&self) -> bool {
+        self.is_tty && !self.verbose
     }
 
     /// Generate indentation string (4 spaces per level)
@@ -172,19 +181,25 @@ impl Ui {
 
     /// Print cached count for per_file mode (using progress bar for consistent newline handling)
     pub fn print_per_file_cached(&self, name: &str, count: usize, indent: usize) {
-        let pb = crate::ui::create_running_indicator(name, indent);
         let prefix = Self::indent_str(indent);
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template(&format!("{}{{msg}}", prefix))
-                .unwrap(),
-        );
-        pb.finish_with_message(format!(
+        let message = format!(
             "{} {} {}",
             style(ICON_CIRCLE).green().bold(),
             style(name).bold(),
             style(format!("({} cached)", count)).dim()
-        ));
+        );
+
+        if self.use_progress_bars() {
+            let pb = crate::ui::create_running_indicator(name, indent);
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template(&format!("{}{{msg}}", prefix))
+                    .unwrap(),
+            );
+            pb.finish_with_message(message);
+        } else {
+            println!("{}{}", prefix, message);
+        }
     }
 
     /// Print when a check fails
@@ -370,17 +385,23 @@ pub fn create_running_indicator(name: &str, indent: usize) -> ProgressBar {
 #[allow(dead_code)]
 pub fn finish_pass(pb: &ProgressBar, name: &str, duration_ms: u64, indent: usize) {
     let prefix = "    ".repeat(indent);
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{}{{msg}}", prefix))
-            .unwrap(),
-    );
-    pb.finish_with_message(format!(
+    let message = format!(
         "{} {} {}",
         style(ICON_CIRCLE).green().bold(),
         style(name).bold(),
         style(format!("({})", format_duration(duration_ms))).dim()
-    ));
+    );
+
+    if pb.is_hidden() {
+        println!("{}{}", prefix, message);
+    } else {
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template(&format!("{}{{msg}}", prefix))
+                .unwrap(),
+        );
+        pb.finish_with_message(message);
+    }
 }
 
 /// Finish a running indicator with cached state (green circle) + metadata display
@@ -391,17 +412,24 @@ pub fn finish_cached(
     indent: usize,
 ) {
     let prefix = "    ".repeat(indent);
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{}{{msg}}", prefix))
-            .unwrap(),
-    );
-    pb.finish_with_message(format!(
+    let message = format!(
         "{} {} {}",
         style(ICON_CIRCLE).green().bold(),
         style(name).bold(),
         style("(cached)").dim()
-    ));
+    );
+
+    if pb.is_hidden() {
+        // Non-TTY: print directly
+        println!("{}{}", prefix, message);
+    } else {
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template(&format!("{}{{msg}}", prefix))
+                .unwrap(),
+        );
+        pb.finish_with_message(message);
+    }
 
     // Print metadata below (if any)
     if !metadata.is_empty() {
@@ -413,7 +441,9 @@ pub fn finish_cached(
 #[allow(dead_code)]
 pub fn finish_fail(pb: &ProgressBar, name: &str, command: &str, duration_ms: u64, indent: usize) {
     let prefix = "    ".repeat(indent);
-    pb.finish_and_clear();
+    if !pb.is_hidden() {
+        pb.finish_and_clear();
+    }
     println!(
         "{}{} {} {}",
         prefix,
@@ -484,18 +514,24 @@ pub fn finish_pass_with_metadata(
 ) {
     let prefix = "    ".repeat(indent);
     let duration_str = format_duration_display(duration_ms);
-
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{}{{msg}}", prefix))
-            .unwrap(),
-    );
-    pb.finish_with_message(format!(
+    let message = format!(
         "{} {} {}",
         style(ICON_CIRCLE).green().bold(),
         style(name).bold(),
         style(duration_str).dim()
-    ));
+    );
+
+    if pb.is_hidden() {
+        // Non-TTY: print directly
+        println!("{}{}", prefix, message);
+    } else {
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template(&format!("{}{{msg}}", prefix))
+                .unwrap(),
+        );
+        pb.finish_with_message(message);
+    }
 
     // Print metadata below (if any)
     if !metadata.is_empty() {
@@ -516,7 +552,9 @@ pub fn finish_fail_with_metadata(
     let prefix = "    ".repeat(indent);
     let duration_str = format_duration_display(duration_ms);
 
-    pb.finish_and_clear();
+    if !pb.is_hidden() {
+        pb.finish_and_clear();
+    }
     println!(
         "{}{} {} {}",
         prefix,

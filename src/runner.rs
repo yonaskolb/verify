@@ -626,12 +626,12 @@ fn execute_verification(
         );
     }
 
-    // In verbose mode, print start indicator instead of using progress bar
-    // (progress bar redraws interfere with streamed output)
-    let pb = if !json && !ui.is_verbose() {
+    // In verbose mode or non-TTY, print start indicator instead of using progress bar
+    // (progress bar redraws interfere with streamed output or don't work in non-TTY)
+    let pb = if !json && ui.use_progress_bars() {
         Some(create_running_indicator(&check.name, indent))
     } else {
-        if !json && ui.is_verbose() {
+        if !json {
             ui.print_running(&check.name, indent);
         }
         None
@@ -786,10 +786,10 @@ fn execute_per_file(
     for file_path in &stale_files {
         // Create progress bar showing "check_name: file_path"
         let display_name = format!("{}: {}", check.name, file_path);
-        let file_pb = if !json && !ui.is_verbose() {
+        let file_pb = if !json && ui.use_progress_bars() {
             Some(create_running_indicator(&display_name, indent))
         } else {
-            if !json && ui.is_verbose() {
+            if !json {
                 ui.print_running(&display_name, indent);
             }
             None
