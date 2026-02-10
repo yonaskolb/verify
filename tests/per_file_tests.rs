@@ -266,7 +266,7 @@ fn test_per_file_config_change_invalidates_all_files() {
     // Status should show stale (config changed)
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("config"),
+        stdout.contains("unverified") || stdout.contains("config"),
         "Should be stale due to config change: {}",
         stdout
     );
@@ -305,7 +305,7 @@ fn test_per_file_new_file_detected_as_stale() {
     // Status should show stale
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("changed"),
+        stdout.contains("unverified") || stdout.contains("changed"),
         "Should detect new file as stale: {}",
         stdout
     );

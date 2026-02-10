@@ -46,7 +46,7 @@ verify init
 # Edit verify.yaml to define your checks
 # Then run:
 verify status  # See what needs to run
-verify         # Run stale checks
+verify         # Run unverified checks
 ```
 
 ## Configuration
@@ -86,11 +86,29 @@ verifications:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Unique identifier for the check |
-| `command` | Yes | Shell command to execute |
-| `cache_paths` | No | Glob patterns for files that affect this check. If omitted, check always runs |
+| `command` | No | Shell command to execute. If omitted, creates an aggregate check whose status is derived from its dependencies |
+| `cache_paths` | No | Glob patterns for files that affect this check. If omitted, check is untracked (always runs) |
 | `depends_on` | No | List of checks or subprojects that must pass first |
 | `metadata` | No | Regex patterns for extracting metrics from output |
-| `per_file` | No | Run command once per stale file (sets `VERIFY_FILE` env var) |
+| `per_file` | No | Run command once per changed file (sets `VERIFY_FILE` env var) |
+
+### Aggregate Checks
+
+Create checks without a command to group related checks. Their status is derived from their dependencies:
+
+```yaml
+verifications:
+  - name: build
+    command: npm run build
+    cache_paths: ["src/**/*.ts"]
+
+  - name: test
+    command: npm test
+    cache_paths: ["src/**/*.ts", "tests/**/*.ts"]
+
+  - name: all
+    depends_on: [build, test]  # verified when both deps are verified
+```
 
 ### Subprojects
 
@@ -162,25 +180,28 @@ When `per_file: true`:
 ### Check Status
 
 ```bash
-verify status
+verify status             # Show all checks
+verify status build       # Show status for a specific check
+verify status --verify    # Exit with code 1 if any check is unverified
 ```
 
 Output:
 ```
-✓ build - fresh
-✓ typecheck - fresh
-○ test - stale (depends on: build)
-○ lint - stale (3 files changed)
-○ e2e - stale (config changed)
-? integration - never run
+● build - verified
+● typecheck - verified
+● test - unverified (depends on: build)
+● lint - unverified (3 file(s) changed)
+● e2e - unverified (config changed)
+● integration - unverified (never run)
+● always-run - untracked
 ```
 
 ### Run Checks
 
 ```bash
-verify                    # Run all stale checks
+verify                    # Run all unverified checks
 verify run build          # Run specific check (and dependencies)
-verify run --force        # Force run even if fresh
+verify run --force        # Force run even if verified
 verify run --verbose      # Stream command output in real-time
 ```
 
@@ -199,18 +220,22 @@ Example output:
   "checks": [
     {
       "name": "build",
-      "status": "fresh"
+      "status": "verified"
     },
     {
       "name": "test",
-      "status": "stale",
-      "reason": "dependency_stale",
+      "status": "unverified",
+      "reason": "dependency_unverified",
       "stale_dependency": "build"
     },
     {
       "name": "lint",
-      "status": "stale",
+      "status": "unverified",
       "reason": "config_changed"
+    },
+    {
+      "name": "always-run",
+      "status": "untracked"
     }
   ]
 }
@@ -229,12 +254,12 @@ The cache is stored in `verify.lock` at your project root. This file is designed
 
 1. **File Hashing**: verify computes BLAKE3 hashes of all files matching `cache_paths`
 2. **Cache Storage**: Results are stored in `verify.lock` at the project root - a committable lock file that travels with your code
-3. **Staleness Detection**: A check is stale if:
+3. **Verification Status**: A check is unverified if:
    - Files in `cache_paths` changed since last successful run
    - The check definition changed in `verify.yaml` (command, cache_paths, timeout, per_file, or metadata patterns)
-   - Any dependency (check or subproject) is stale
-   - Last run failed
-   - No `cache_paths` defined (always runs)
+   - Any dependency (check or subproject) is unverified
+   - Last run failed or never run
+   - Checks with no `cache_paths` are "untracked" (always run since changes can't be detected)
 4. **Parallel Execution**: Independent checks run concurrently
 5. **Dependency Ordering**: Checks run in topological order respecting `depends_on`
 6. **Incremental Saves**: Cache is saved after each check completes (and after each file in per_file mode)
@@ -263,7 +288,7 @@ The `verify.lock` file is designed to be committed to version control. This enab
 4. **CI runs verify - skips already-passed checks**
    ```bash
    verify run
-   # Checks are fresh because file hashes match what developer already verified
+   # Checks are verified because file hashes match what developer already verified
    ```
 
 ### Why This Matters
@@ -287,7 +312,7 @@ This tells git to prefer "our" version during merges - you'll re-run verify afte
 
 | Code | Meaning |
 |------|---------|
-| 0 | All checks passed (or skipped as fresh) |
+| 0 | All checks passed (or skipped as verified) |
 | 1 | One or more checks failed |
 | 2 | Configuration error |
 

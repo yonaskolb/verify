@@ -39,10 +39,10 @@ pub fn compute_check_hash(project_root: &Path, cache_paths: &[String]) -> Result
                     .to_string();
 
                 // Only hash each file once (in case patterns overlap)
-                if !all_files.contains_key(&relative) {
+                if let std::collections::btree_map::Entry::Vacant(e) = all_files.entry(relative) {
                     let hash = hash_file(&path)
                         .with_context(|| format!("Failed to hash file: {}", path.display()))?;
-                    all_files.insert(relative, hash);
+                    e.insert(hash);
                 }
             }
         }

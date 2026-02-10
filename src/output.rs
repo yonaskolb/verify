@@ -1,4 +1,4 @@
-use crate::cache::StalenessReason;
+use crate::cache::{UnverifiedReason, VerificationStatus};
 use crate::metadata::{MetadataValue, compute_delta};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -48,55 +48,78 @@ pub struct CheckStatusJson {
     pub stale_dependency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changed_files: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl CheckStatusJson {
-    pub fn fresh(name: &str, _cache: &crate::cache::CheckCache) -> Self {
-        Self {
-            name: name.to_string(),
-            status: "fresh".to_string(),
-            reason: None,
-            stale_dependency: None,
-            changed_files: None,
-        }
-    }
-
-    pub fn stale(
+    pub fn from_status(
         name: &str,
-        reason: &StalenessReason,
-        _cache: Option<&crate::cache::CheckCache>,
+        status: &VerificationStatus,
+        cache: Option<&crate::cache::CheckCache>,
     ) -> Self {
-        let (reason_str, stale_dep, changed_files) = match reason {
-            StalenessReason::FilesChanged { changed_files } => (
-                Some("files_changed".to_string()),
-                None,
-                Some(changed_files.clone()),
-            ),
-            StalenessReason::DependencyStale { dependency } => (
-                Some("dependency_stale".to_string()),
-                Some(dependency.clone()),
-                None,
-            ),
-            StalenessReason::ConfigChanged => (Some("config_changed".to_string()), None, None),
-            StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
-        };
+        let metadata = cache
+            .filter(|c| !c.metadata.is_empty())
+            .map(|c| {
+                c.metadata
+                    .iter()
+                    .map(|(k, v)| {
+                        let json_value = match v {
+                            MetadataValue::Integer(i) => serde_json::Value::Number((*i).into()),
+                            MetadataValue::Float(f) => serde_json::Number::from_f64(*f)
+                                .map(serde_json::Value::Number)
+                                .unwrap_or(serde_json::Value::Null),
+                            MetadataValue::String(s) => serde_json::Value::String(s.clone()),
+                        };
+                        (k.clone(), json_value)
+                    })
+                    .collect()
+            });
 
-        Self {
-            name: name.to_string(),
-            status: "stale".to_string(),
-            reason: reason_str,
-            stale_dependency: stale_dep,
-            changed_files,
-        }
-    }
+        match status {
+            VerificationStatus::Verified => Self {
+                name: name.to_string(),
+                status: "verified".to_string(),
+                reason: None,
+                stale_dependency: None,
+                changed_files: None,
+                metadata,
+            },
+            VerificationStatus::Unverified { reason } => {
+                let (reason_str, stale_dep, changed_files) = match reason {
+                    UnverifiedReason::FilesChanged { changed_files } => (
+                        Some("files_changed".to_string()),
+                        None,
+                        Some(changed_files.clone()),
+                    ),
+                    UnverifiedReason::DependencyUnverified { dependency } => (
+                        Some("dependency_unverified".to_string()),
+                        Some(dependency.clone()),
+                        None,
+                    ),
+                    UnverifiedReason::ConfigChanged => {
+                        (Some("config_changed".to_string()), None, None)
+                    }
+                    UnverifiedReason::NeverRun => (Some("never_run".to_string()), None, None),
+                };
 
-    pub fn never_run(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            status: "never_run".to_string(),
-            reason: None,
-            stale_dependency: None,
-            changed_files: None,
+                Self {
+                    name: name.to_string(),
+                    status: "unverified".to_string(),
+                    reason: reason_str,
+                    stale_dependency: stale_dep,
+                    changed_files,
+                    metadata,
+                }
+            }
+            VerificationStatus::Untracked => Self {
+                name: name.to_string(),
+                status: "untracked".to_string(),
+                reason: None,
+                stale_dependency: None,
+                changed_files: None,
+                metadata: None,
+            },
         }
     }
 }
@@ -215,6 +238,7 @@ impl CheckRunJson {
 }
 
 /// Convert metadata to JSON format and compute deltas
+#[allow(clippy::type_complexity)]
 fn convert_metadata(
     metadata: &BTreeMap<String, MetadataValue>,
     prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
@@ -241,12 +265,11 @@ fn convert_metadata(
         json_metadata.insert(key.clone(), json_value);
 
         // Compute delta if previous value exists
-        if let Some(prev) = prev_metadata {
-            if let Some(prev_value) = prev.get(key) {
-                if let Some(delta) = compute_delta(value, prev_value) {
-                    deltas.insert(key.clone(), delta);
-                }
-            }
+        if let Some(prev) = prev_metadata
+            && let Some(prev_value) = prev.get(key)
+            && let Some(delta) = compute_delta(value, prev_value)
+        {
+            deltas.insert(key.clone(), delta);
         }
     }
 
@@ -341,7 +364,7 @@ impl RunResults {
             )));
     }
 
-    pub fn to_output(self) -> RunOutput {
+    pub fn into_output(self) -> RunOutput {
         let total = self.passed + self.failed + self.skipped;
         RunOutput {
             results: self.results,
@@ -375,5 +398,124 @@ pub fn format_duration(ms: u64) -> String {
         let mins = ms / 60000;
         let secs = (ms % 60000) / 1000;
         format!("{}m{}s", mins, secs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::CheckCache;
+
+    fn make_cache_with_metadata(metadata: BTreeMap<String, MetadataValue>) -> CheckCache {
+        CheckCache {
+            config_hash: Some("confighash".to_string()),
+            content_hash: Some("contenthash".to_string()),
+            file_hashes: BTreeMap::new(),
+            metadata,
+        }
+    }
+
+    #[test]
+    fn test_status_json_verified_with_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("coverage".to_string(), MetadataValue::Float(85.5));
+        metadata.insert("tests".to_string(), MetadataValue::Integer(42));
+        let cache = make_cache_with_metadata(metadata);
+
+        let result =
+            CheckStatusJson::from_status("build", &VerificationStatus::Verified, Some(&cache));
+
+        assert_eq!(result.status, "verified");
+        let meta = result.metadata.expect("metadata should be present");
+        assert_eq!(meta.get("tests"), Some(&serde_json::json!(42)));
+        assert_eq!(meta.get("coverage"), Some(&serde_json::json!(85.5)));
+    }
+
+    #[test]
+    fn test_status_json_verified_without_metadata() {
+        let cache = make_cache_with_metadata(BTreeMap::new());
+
+        let result =
+            CheckStatusJson::from_status("build", &VerificationStatus::Verified, Some(&cache));
+
+        assert_eq!(result.status, "verified");
+        assert!(result.metadata.is_none());
+    }
+
+    #[test]
+    fn test_status_json_verified_no_cache() {
+        let result = CheckStatusJson::from_status("build", &VerificationStatus::Verified, None);
+
+        assert_eq!(result.status, "verified");
+        assert!(result.metadata.is_none());
+    }
+
+    #[test]
+    fn test_status_json_unverified_with_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("lines".to_string(), MetadataValue::Integer(100));
+        let cache = make_cache_with_metadata(metadata);
+
+        let status = VerificationStatus::Unverified {
+            reason: UnverifiedReason::FilesChanged {
+                changed_files: vec!["src/main.rs".to_string()],
+            },
+        };
+
+        let result = CheckStatusJson::from_status("build", &status, Some(&cache));
+
+        assert_eq!(result.status, "unverified");
+        assert_eq!(result.reason.as_deref(), Some("files_changed"));
+        let meta = result.metadata.expect("metadata should be present");
+        assert_eq!(meta.get("lines"), Some(&serde_json::json!(100)));
+    }
+
+    #[test]
+    fn test_status_json_untracked_no_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("lines".to_string(), MetadataValue::Integer(100));
+        let cache = make_cache_with_metadata(metadata);
+
+        let result =
+            CheckStatusJson::from_status("build", &VerificationStatus::Untracked, Some(&cache));
+
+        assert_eq!(result.status, "untracked");
+        assert!(result.metadata.is_none());
+    }
+
+    #[test]
+    fn test_status_json_metadata_string_value() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("version".to_string(), MetadataValue::String("1.2.3".to_string()));
+        let cache = make_cache_with_metadata(metadata);
+
+        let result =
+            CheckStatusJson::from_status("build", &VerificationStatus::Verified, Some(&cache));
+
+        let meta = result.metadata.expect("metadata should be present");
+        assert_eq!(meta.get("version"), Some(&serde_json::json!("1.2.3")));
+    }
+
+    #[test]
+    fn test_status_json_serialization_omits_null_metadata() {
+        let result = CheckStatusJson::from_status("build", &VerificationStatus::Verified, None);
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("metadata"));
+    }
+
+    #[test]
+    fn test_status_json_serialization_includes_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("count".to_string(), MetadataValue::Integer(5));
+        let cache = make_cache_with_metadata(metadata);
+
+        let result =
+            CheckStatusJson::from_status("build", &VerificationStatus::Verified, Some(&cache));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("metadata"));
+        assert_eq!(obj["metadata"]["count"], serde_json::json!(5));
     }
 }

@@ -218,7 +218,7 @@ verifications:
     // Get status - should show stale
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
     assert!(success);
-    assert!(stdout.contains("stale") || stdout.contains("changed") || !stdout.contains("fresh"));
+    assert!(stdout.contains("unverified") || stdout.contains("changed") || !stdout.contains("verified"));
 }
 
 #[test]
@@ -344,7 +344,7 @@ verifications:
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
 
     assert!(success);
-    assert!(stdout.contains("never") || stdout.contains("stale") || stdout.contains("✗"));
+    assert!(stdout.contains("unverified") || stdout.contains("unverified") || stdout.contains("✗"));
 }
 
 #[test]
@@ -366,7 +366,7 @@ verifications:
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
 
     assert!(success);
-    assert!(stdout.contains("fresh") || stdout.contains("✓"));
+    assert!(stdout.contains("verified") || stdout.contains("✓"));
 }
 
 #[test]
@@ -628,6 +628,70 @@ fn test_metadata_extraction() {
             );
         }
     }
+}
+
+// ==================== Status Metadata Tests ====================
+
+#[test]
+fn test_status_json_includes_metadata() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let config = r#"verifications:
+  - name: with_meta
+    command: "echo 'Tests: 42 passed, Coverage: 85.5%'"
+    cache_paths:
+      - "*.txt"
+    metadata:
+      tests: "Tests: (\\d+) passed"
+      coverage: "Coverage: ([\\d.]+)%"
+"#;
+    fs::write(temp_dir.path().join("verify.yaml"), config).unwrap();
+    fs::write(temp_dir.path().join("code.txt"), "content").unwrap();
+
+    // Run to populate cache with metadata
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["run"]);
+    assert!(success, "Run should succeed. Stderr: {}", stderr);
+
+    // Now check status includes metadata
+    let (success, stdout, stderr) = run_verify(temp_dir.path(), &["--json", "status"]);
+    assert!(success, "Status should succeed. Stderr: {}", stderr);
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("Failed to parse JSON: {}. Output: {}", e, stdout));
+
+    let checks = parsed["checks"].as_array().expect("checks should be array");
+    let check = checks.iter().find(|c| c["name"] == "with_meta").expect("should find with_meta");
+
+    assert_eq!(check["status"], "verified");
+    assert_eq!(check["metadata"]["tests"], serde_json::json!(42));
+    assert_eq!(check["metadata"]["coverage"], serde_json::json!(85.5));
+}
+
+#[test]
+fn test_status_json_omits_metadata_when_empty() {
+    let config = r#"
+verifications:
+  - name: no_meta
+    command: echo "test"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    // Run to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Status should not have metadata field
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["--json", "status"]);
+    assert!(success);
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let checks = parsed["checks"].as_array().expect("checks should be array");
+    let check = checks.iter().find(|c| c["name"] == "no_meta").expect("should find no_meta");
+
+    assert_eq!(check["status"], "verified");
+    assert!(check.get("metadata").is_none() || check["metadata"].is_null());
 }
 
 // ==================== Exit Code Tests ====================

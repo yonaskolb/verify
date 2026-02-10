@@ -16,6 +16,10 @@ verifications:
   - name: always-run
     command: echo "This check always runs"
 
+  # Aggregate check - no command, status derived from dependencies
+  - name: all-subprojects
+    depends_on: [frontend, backend]
+
   # Example with metadata extraction
   - name: test-with-metrics
     command: |

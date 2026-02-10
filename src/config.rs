@@ -57,7 +57,9 @@ pub struct Verification {
     pub name: String,
 
     /// Command to execute (shell command)
-    pub command: String,
+    /// If None, this is an aggregate check whose status is derived from its dependencies
+    #[serde(default)]
+    pub command: Option<String>,
 
     /// Glob patterns for files that affect this check's cache validity
     /// If empty or not specified, the check always runs (no verify-level caching)
@@ -90,7 +92,9 @@ impl Verification {
 
         // Hash command
         hasher.update(b"command:");
-        hasher.update(self.command.as_bytes());
+        if let Some(ref cmd) = self.command {
+            hasher.update(cmd.as_bytes());
+        }
         hasher.update(b"\n");
 
         // Hash cache_paths (sorted for determinism)
@@ -555,7 +559,7 @@ verifications: []
     fn test_config_hash_determinism() {
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["src/**/*.ts".to_string()],
             depends_on: vec![],
             timeout_secs: Some(300),
@@ -565,7 +569,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["src/**/*.ts".to_string()],
             depends_on: vec![],
             timeout_secs: Some(300),
@@ -580,7 +584,7 @@ verifications: []
     fn test_config_hash_changes_with_command() {
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -590,7 +594,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm run test".to_string(), // different command
+            command: Some("npm run test".to_string()), // different command
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -605,7 +609,7 @@ verifications: []
     fn test_config_hash_changes_with_cache_paths() {
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["src/**/*.ts".to_string()],
             depends_on: vec![],
             timeout_secs: None,
@@ -615,7 +619,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["src/**/*.js".to_string()], // different path
             depends_on: vec![],
             timeout_secs: None,
@@ -630,7 +634,7 @@ verifications: []
     fn test_config_hash_changes_with_timeout() {
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: Some(300),
@@ -640,7 +644,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: Some(600), // different timeout
@@ -655,7 +659,7 @@ verifications: []
     fn test_config_hash_changes_with_per_file() {
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -665,7 +669,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -681,7 +685,7 @@ verifications: []
         // Cache paths should be sorted, so order doesn't matter
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["a.ts".to_string(), "b.ts".to_string(), "c.ts".to_string()],
             depends_on: vec![],
             timeout_secs: None,
@@ -691,7 +695,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec!["c.ts".to_string(), "a.ts".to_string(), "b.ts".to_string()],
             depends_on: vec![],
             timeout_secs: None,
@@ -714,7 +718,7 @@ verifications: []
 
         let v1 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -724,7 +728,7 @@ verifications: []
 
         let v2 = Verification {
             name: "test".to_string(),
-            command: "npm test".to_string(),
+            command: Some("npm test".to_string()),
             cache_paths: vec![],
             depends_on: vec![],
             timeout_secs: None,
@@ -750,18 +754,23 @@ verifications:
     }
 
     #[test]
-    fn test_missing_command_parses_as_subproject() {
-        // Without a command, serde's untagged enum parses this as a Subproject
-        // (since Subproject only requires name + path, and cache_paths is ignored)
-        // This is expected behavior due to serde's untagged enum matching
+    fn test_missing_command_parses_as_aggregate() {
+        // Without a command, this is an aggregate check (command is optional)
         let yaml = r#"
 verifications:
-  - name: test
-    cache_paths: []
+  - name: all
+    depends_on: [build, test]
 "#;
-        let result: Result<Config, _> = serde_yml::from_str(yaml);
-        // Parsing fails because without command or path, neither variant matches
-        assert!(result.is_err());
+        let config: Config = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(config.verifications.len(), 1);
+        match &config.verifications[0] {
+            VerificationItem::Verification(v) => {
+                assert_eq!(v.name, "all");
+                assert!(v.command.is_none());
+                assert_eq!(v.depends_on, vec!["build", "test"]);
+            }
+            _ => panic!("Expected Verification"),
+        }
     }
 
     // ==================== Special characters tests ====================
@@ -796,8 +805,8 @@ verifications:
         let config: Config = serde_yml::from_str(yaml).unwrap();
         assert!(config.validate(Path::new(".")).is_ok());
         let test = config.get("test").unwrap();
-        assert!(test.command.contains("世界"));
-        assert!(test.command.contains("🎉"));
+        assert!(test.command.as_ref().unwrap().contains("世界"));
+        assert!(test.command.as_ref().unwrap().contains("🎉"));
     }
 
     // ==================== Getter method tests ====================

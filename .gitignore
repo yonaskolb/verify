@@ -1,3 +1,4 @@
 /target
 **/verify.lock
 .DS_Store
+.context
