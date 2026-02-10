@@ -42,11 +42,19 @@ pub enum Commands {
         stage: bool,
     },
 
-    /// Show status of all checks
+    /// Show status of checks
     Status {
+        /// Specific check name to show status for
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+
         /// Show detailed file-level information
         #[arg(long)]
         detailed: bool,
+
+        /// Exit with code 1 if any check is unverified
+        #[arg(long)]
+        verify: bool,
     },
 
     /// Initialize a new verify.yaml config file

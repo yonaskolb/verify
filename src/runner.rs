@@ -182,16 +182,18 @@ fn get_stale_files_from_cache(
         .collect()
 }
 
-/// Run the status command
+/// Run the status command. Returns true if any displayed check is unverified.
 pub fn run_status(
     project_root: &Path,
     config: &Config,
     cache: &CacheState,
     json: bool,
     _detailed: bool,
-) -> Result<()> {
+    name: Option<String>,
+) -> Result<bool> {
     let ui = Ui::new(false);
-    let status_items = run_status_recursive(project_root, config, cache, &ui, json, 0)?;
+    let (status_items, has_unverified) =
+        run_status_recursive(project_root, config, cache, &ui, json, 0, &name)?;
 
     if json {
         let output = StatusOutput {
@@ -200,10 +202,11 @@ pub fn run_status(
         println!("{}", serde_json::to_string_pretty(&output)?);
     }
 
-    Ok(())
+    Ok(has_unverified)
 }
 
-/// Recursively process status for config and all subprojects
+/// Recursively process status for config and all subprojects.
+/// Returns (status_items, has_unverified).
 fn run_status_recursive(
     project_root: &Path,
     config: &Config,
@@ -211,11 +214,13 @@ fn run_status_recursive(
     ui: &Ui,
     json: bool,
     indent: usize,
-) -> Result<Vec<StatusItemJson>> {
+    filter_name: &Option<String>,
+) -> Result<(Vec<StatusItemJson>, bool)> {
     let graph = DependencyGraph::from_config(config)?;
 
     // Track which checks are stale (for dependency propagation)
     let mut is_stale: HashMap<String, bool> = HashMap::new();
+    let mut has_unverified = false;
 
     // Pre-compute subproject staleness so verifications that depend on them
     // can correctly determine their own status
@@ -253,7 +258,8 @@ fn run_status_recursive(
             let status = compute_status(check, &hash_result, cache, &is_stale);
 
             // Record staleness for dependent checks
-            is_stale.insert(name.clone(), !matches!(status, VerificationStatus::Verified));
+            let is_not_verified = !matches!(status, VerificationStatus::Verified);
+            is_stale.insert(name.clone(), is_not_verified);
 
             let json_item = CheckStatusJson::from_status(&name, &status, cache.get(&name));
 
@@ -265,21 +271,39 @@ fn run_status_recursive(
     for item in &config.verifications {
         match item {
             VerificationItem::Verification(v) => {
+                // Skip if filtering by name and this isn't the one
+                let show = filter_name.as_ref().is_none_or(|n| n == &v.name);
+
                 let (status, json_item) = verification_statuses.remove(&v.name).unwrap();
 
-                if json {
-                    status_items.push(StatusItemJson::Check(json_item));
-                } else {
-                    let empty = BTreeMap::new();
-                    let metadata = cache
-                        .get(&v.name)
-                        .map(|c| &c.metadata)
-                        .unwrap_or(&empty);
-                    ui.print_status(&v.name, &status, metadata, indent);
+                if show {
+                    if !matches!(status, VerificationStatus::Verified) {
+                        has_unverified = true;
+                    }
+
+                    if json {
+                        status_items.push(StatusItemJson::Check(json_item));
+                    } else {
+                        let empty = BTreeMap::new();
+                        let metadata = cache
+                            .get(&v.name)
+                            .map(|c| &c.metadata)
+                            .unwrap_or(&empty);
+                        ui.print_status(&v.name, &status, metadata, indent);
+                    }
                 }
             }
             VerificationItem::Subproject(s) => {
-                let sub_items = run_status_subproject(project_root, s, ui, json, indent)?;
+                // Skip subprojects when filtering by a specific check name
+                if filter_name.is_some() {
+                    continue;
+                }
+
+                let (sub_items, sub_unverified) =
+                    run_status_subproject(project_root, s, ui, json, indent)?;
+                if sub_unverified {
+                    has_unverified = true;
+                }
 
                 if json {
                     status_items.push(StatusItemJson::Subproject(SubprojectStatusJson::new(
@@ -292,17 +316,17 @@ fn run_status_recursive(
         }
     }
 
-    Ok(status_items)
+    Ok((status_items, has_unverified))
 }
 
-/// Run status for a subproject
+/// Run status for a subproject. Returns (status_items, has_unverified).
 fn run_status_subproject(
     parent_root: &Path,
     subproject: &Subproject,
     ui: &Ui,
     json: bool,
     indent: usize,
-) -> Result<Vec<StatusItemJson>> {
+) -> Result<(Vec<StatusItemJson>, bool)> {
     let subproject_dir = parent_root.join(&subproject.path);
     let subproject_config_path = subproject_dir.join("verify.yaml");
 
@@ -316,7 +340,7 @@ fn run_status_subproject(
         ui.print_subproject_header(&subproject.name, indent, has_stale);
     }
 
-    // Recursively process subproject
+    // Recursively process subproject (no name filtering within subprojects)
     run_status_recursive(
         &subproject_dir,
         &sub_config,
@@ -324,6 +348,7 @@ fn run_status_subproject(
         ui,
         json,
         indent + 1,
+        &None,
     )
 }
 

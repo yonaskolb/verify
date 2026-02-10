@@ -57,11 +57,28 @@ fn run() -> Result<i32> {
             Ok(0)
         }
 
-        Commands::Status { detailed } => {
+        Commands::Status {
+            name,
+            detailed,
+            verify,
+        } => {
             let config = config::Config::load(config_path)?;
+
+            // Validate check name if provided
+            if let Some(ref name) = name {
+                if config.get(name).is_none() {
+                    anyhow::bail!("Unknown check: {}", name);
+                }
+            }
+
             let cache = cache::CacheState::load(&project_root)?;
-            runner::run_status(&project_root, &config, &cache, cli.json, detailed)?;
-            Ok(0)
+            let has_unverified =
+                runner::run_status(&project_root, &config, &cache, cli.json, detailed, name)?;
+            if verify && has_unverified {
+                Ok(1)
+            } else {
+                Ok(0)
+            }
         }
 
         Commands::Run {
