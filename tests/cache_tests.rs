@@ -120,7 +120,7 @@ verifications:
     fs::write(project.path().join("verify.lock"), old_lock).unwrap();
 
     // Run again - should treat as fresh start due to version mismatch
-    let (success, stdout, _) = project.run(&["run"]);
+    let (success, _stdout, _) = project.run(&["run"]);
     assert!(success);
 
     // Should have re-run (not cached)

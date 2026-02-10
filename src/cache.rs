@@ -170,6 +170,7 @@ impl CacheState {
 
     /// Update cache after running a check.
     /// Only stores file_hashes for per_file checks to keep lock file small.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         check_name: &str,

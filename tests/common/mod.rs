@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Shared test fixtures and helpers for integration tests
 use std::fs;
 use std::path::{Path, PathBuf};

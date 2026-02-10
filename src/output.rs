@@ -238,6 +238,7 @@ impl CheckRunJson {
 }
 
 /// Convert metadata to JSON format and compute deltas
+#[allow(clippy::type_complexity)]
 fn convert_metadata(
     metadata: &BTreeMap<String, MetadataValue>,
     prev_metadata: Option<&BTreeMap<String, MetadataValue>>,
@@ -264,12 +265,11 @@ fn convert_metadata(
         json_metadata.insert(key.clone(), json_value);
 
         // Compute delta if previous value exists
-        if let Some(prev) = prev_metadata {
-            if let Some(prev_value) = prev.get(key) {
-                if let Some(delta) = compute_delta(value, prev_value) {
-                    deltas.insert(key.clone(), delta);
-                }
-            }
+        if let Some(prev) = prev_metadata
+            && let Some(prev_value) = prev.get(key)
+            && let Some(delta) = compute_delta(value, prev_value)
+        {
+            deltas.insert(key.clone(), delta);
         }
     }
 
@@ -364,7 +364,7 @@ impl RunResults {
             )));
     }
 
-    pub fn to_output(self) -> RunOutput {
+    pub fn into_output(self) -> RunOutput {
         let total = self.passed + self.failed + self.skipped;
         RunOutput {
             results: self.results,

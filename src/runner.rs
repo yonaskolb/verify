@@ -59,24 +59,20 @@ fn execute_command(
         // Read stdout
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    println!("{}", line);
-                    combined_output.push_str(&line);
-                    combined_output.push('\n');
-                }
+            for line in reader.lines().map_while(Result::ok) {
+                println!("{}", line);
+                combined_output.push_str(&line);
+                combined_output.push('\n');
             }
         }
 
         // Read stderr
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    eprintln!("{}", line);
-                    combined_output.push_str(&line);
-                    combined_output.push('\n');
-                }
+            for line in reader.lines().map_while(Result::ok) {
+                eprintln!("{}", line);
+                combined_output.push_str(&line);
+                combined_output.push('\n');
             }
         }
 
@@ -417,7 +413,7 @@ pub fn run_checks(
     let total_duration_ms = start_time.elapsed().as_millis() as u64;
 
     if json {
-        let output = final_results.to_output();
+        let output = final_results.into_output();
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         ui.print_summary(
@@ -433,6 +429,7 @@ pub fn run_checks(
 }
 
 /// Recursively run checks for config and all subprojects
+#[allow(clippy::too_many_arguments)]
 fn run_checks_recursive(
     project_root: &Path,
     config: &Config,
@@ -469,6 +466,7 @@ fn run_checks_recursive(
 }
 
 /// Execute an item (verification or subproject) and its dependencies
+#[allow(clippy::too_many_arguments)]
 fn execute_item_with_deps(
     project_root: &Path,
     config: &Config,
@@ -568,6 +566,7 @@ fn execute_item_with_deps(
 }
 
 /// Execute a single verification
+#[allow(clippy::too_many_arguments)]
 fn execute_verification(
     project_root: &Path,
     check: &Verification,
@@ -791,6 +790,7 @@ fn execute_verification(
 }
 
 /// Execute a verification in per_file mode
+#[allow(clippy::too_many_arguments)]
 fn execute_per_file(
     project_root: &Path,
     check: &Verification,

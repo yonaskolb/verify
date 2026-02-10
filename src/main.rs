@@ -65,10 +65,10 @@ fn run() -> Result<i32> {
             let config = config::Config::load(config_path)?;
 
             // Validate check name if provided
-            if let Some(ref name) = name {
-                if config.get(name).is_none() {
-                    anyhow::bail!("Unknown check: {}", name);
-                }
+            if let Some(ref name) = name
+                && config.get(name).is_none()
+            {
+                anyhow::bail!("Unknown check: {}", name);
             }
 
             let cache = cache::CacheState::load(&project_root)?;
