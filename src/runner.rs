@@ -128,6 +128,11 @@ fn compute_staleness(
         }
     }
 
+    // Aggregate checks (no command): status is derived purely from dependencies
+    if check.command.is_none() {
+        return StalenessStatus::Fresh;
+    }
+
     // If no cache_paths defined, always run (rely on command's own caching)
     if check.cache_paths.is_empty() {
         return StalenessStatus::Stale {
@@ -585,6 +590,40 @@ fn execute_verification(
         compute_staleness(check, &hash_result, cache, &dep_staleness)
     };
 
+    // Aggregate checks (no command): pass/fail derived from dependencies
+    if check.command.is_none() {
+        if dep_failed {
+            let failed_dep = check
+                .depends_on
+                .iter()
+                .find(|d| executed.get(*d).copied().unwrap_or(false))
+                .unwrap_or(&check.depends_on[0])
+                .clone();
+            if !json {
+                let pb = create_running_indicator(&check.name, indent);
+                finish_fail_with_metadata(
+                    &pb,
+                    &check.name,
+                    &format!("dependency '{}' failed", failed_dep),
+                    0,
+                    &BTreeMap::new(),
+                    None,
+                    indent,
+                );
+            }
+            results.add_fail(&check.name, 0, None, None, &BTreeMap::new(), None);
+            executed.insert(check.name.clone(), true);
+        } else {
+            if !json {
+                let pb = create_running_indicator(&check.name, indent);
+                finish_cached(&pb, &check.name, &BTreeMap::new(), indent);
+            }
+            results.add_skipped(&check.name);
+            executed.insert(check.name.clone(), false);
+        }
+        return Ok(());
+    }
+
     let should_run = force || !matches!(staleness, StalenessStatus::Fresh);
 
     if !should_run {
@@ -637,10 +676,11 @@ fn execute_verification(
         None
     };
 
-    // Execute the check
+    // Execute the check (command is guaranteed Some here — aggregate checks returned early)
+    let command = check.command.as_ref().unwrap();
     let start = Instant::now();
     let (success, exit_code, output) = execute_command(
-        &check.command,
+        command,
         project_root,
         check.timeout_secs,
         ui.is_verbose(),
@@ -697,7 +737,7 @@ fn execute_verification(
             finish_fail_with_metadata(
                 &pb,
                 &check.name,
-                &check.command,
+                command,
                 duration_ms,
                 &metadata,
                 prev_metadata.as_ref(),
@@ -797,9 +837,10 @@ fn execute_per_file(
 
         let env_vars = [("VERIFY_FILE", file_path.as_str())];
 
+        let command = check.command.as_ref().unwrap();
         let file_start = Instant::now();
         let (success, exit_code, output) = execute_command(
-            &check.command,
+            command,
             project_root,
             check.timeout_secs,
             ui.is_verbose(),
@@ -836,7 +877,7 @@ fn execute_per_file(
                 finish_fail_with_metadata(
                     &pb,
                     &display_name,
-                    &check.command,
+                    command,
                     file_duration_ms,
                     &BTreeMap::new(),
                     None,
@@ -981,7 +1022,7 @@ mod tests {
     ) -> Verification {
         Verification {
             name: name.to_string(),
-            command: "echo test".to_string(),
+            command: Some("echo test".to_string()),
             cache_paths: cache_paths.into_iter().map(|s| s.to_string()).collect(),
             depends_on: depends_on.into_iter().map(|s| s.to_string()).collect(),
             timeout_secs: None,
@@ -1196,6 +1237,45 @@ mod tests {
                 reason: StalenessReason::NoCachePaths,
             } => {}
             other => panic!("Expected NoCachePaths, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_staleness_aggregate_fresh_when_deps_fresh() {
+        // Aggregate check (no command) is Fresh when all deps are fresh
+        let mut check = make_verification("all", vec![], vec!["build", "test"]);
+        check.command = None;
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), false);
+        dep_staleness.insert("test".to_string(), false);
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        assert_eq!(result, StalenessStatus::Fresh);
+    }
+
+    #[test]
+    fn test_compute_staleness_aggregate_stale_when_dep_stale() {
+        // Aggregate check (no command) is stale when a dep is stale
+        let mut check = make_verification("all", vec![], vec!["build", "test"]);
+        check.command = None;
+        let hash_result = make_hash_result("hash123", vec![]);
+        let cache = CacheState::new();
+
+        let mut dep_staleness = HashMap::new();
+        dep_staleness.insert("build".to_string(), true);
+        dep_staleness.insert("test".to_string(), false);
+
+        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        match result {
+            StalenessStatus::Stale {
+                reason: StalenessReason::DependencyStale { dependency },
+            } => {
+                assert_eq!(dependency, "build");
+            }
+            other => panic!("Expected DependencyStale, got {:?}", other),
         }
     }
 

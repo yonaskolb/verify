@@ -213,7 +213,7 @@ mod tests {
                 .map(|(name, deps)| {
                     VerificationItem::Verification(Verification {
                         name: name.to_string(),
-                        command: "echo test".to_string(),
+                        command: Some("echo test".to_string()),
                         cache_paths: vec![],
                         depends_on: deps.into_iter().map(String::from).collect(),
                         timeout_secs: None,
