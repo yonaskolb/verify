@@ -38,18 +38,24 @@ The codebase is organized into focused modules in `src/`:
 
 ### Key Flows
 
-**Staleness Detection**: A check is stale if:
+**Verification Status** (`VerificationStatus` enum in cache.rs):
+- `Verified` - Check passed and files haven't changed
+- `Unverified { reason }` - Check needs to run
+- `Untracked` - Check has no `cache_paths`, so changes can't be tracked (always runs)
+
+A check is **unverified** if:
 1. Files matching `cache_paths` changed since last successful run
 2. Check definition changed in verify.yaml (detected via `config_hash` - includes command, cache_paths, timeout, per_file, metadata patterns)
-3. Any dependency (verification or subproject) is stale
-4. Last run failed
-5. No `cache_paths` defined (always runs)
+3. Any dependency (verification or subproject) is unverified
+4. Last run failed or never run
 
-**Staleness Reasons** (from `StalenessReason` enum in cache.rs):
+**Unverified Reasons** (`UnverifiedReason` enum in cache.rs):
 - `FilesChanged` - Files in cache_paths have changed
 - `ConfigChanged` - The check definition changed in verify.yaml
-- `DependencyStale` - A dependency is stale
-- `NoCachePaths` - No cache_paths defined, always runs
+- `DependencyUnverified` - A dependency is unverified
+- `NeverRun` - Never run or no successful run recorded
+
+**Aggregate Checks**: Checks can omit the `command` field to create aggregate checks whose status is derived purely from their dependencies. Useful for grouping related checks.
 
 **Execution Model**: Checks are grouped into "waves" - independent checks within a wave run in parallel via rayon, waves execute sequentially to respect dependencies.
 
@@ -89,7 +95,7 @@ On `verify init`, `.gitattributes` is updated with `verify.lock merge=ours` for 
 ```yaml
 verifications:
   - name: check_name
-    command: npm run build
+    command: npm run build       # optional - omit for aggregate checks
     cache_paths:
       - "src/**/*.ts"
     depends_on: [other_check]  # optional
@@ -97,6 +103,9 @@ verifications:
     per_file: false            # optional - run once per stale file with VERIFY_FILE env var
     metadata:                   # optional - regex extraction
       key: "pattern"
+
+  - name: all                  # aggregate check - status derived from dependencies
+    depends_on: [check_name, frontend]
 
   - name: frontend
     path: packages/frontend  # references another verify.yaml
