@@ -54,7 +54,13 @@ impl Ui {
     }
 
     /// Print status for a check
-    pub fn print_status(&self, name: &str, status: &VerificationStatus, indent: usize) {
+    pub fn print_status(
+        &self,
+        name: &str,
+        status: &VerificationStatus,
+        metadata: &BTreeMap<String, MetadataValue>,
+        indent: usize,
+    ) {
         let prefix = Self::indent_str(indent);
         match status {
             VerificationStatus::Verified => {
@@ -100,6 +106,10 @@ impl Ui {
                     style("untracked").dim()
                 );
             }
+        }
+
+        if !metadata.is_empty() {
+            print_metadata(metadata, None, indent);
         }
     }
 

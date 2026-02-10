@@ -270,7 +270,12 @@ fn run_status_recursive(
                 if json {
                     status_items.push(StatusItemJson::Check(json_item));
                 } else {
-                    ui.print_status(&v.name, &status, indent);
+                    let empty = BTreeMap::new();
+                    let metadata = cache
+                        .get(&v.name)
+                        .map(|c| &c.metadata)
+                        .unwrap_or(&empty);
+                    ui.print_status(&v.name, &status, metadata, indent);
                 }
             }
             VerificationItem::Subproject(s) => {
