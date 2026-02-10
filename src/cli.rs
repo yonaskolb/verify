@@ -6,11 +6,11 @@ use std::path::PathBuf;
 #[command(author, version, about = "Run and cache project verification checks")]
 pub struct Cli {
     /// Path to config file (default: verify.yaml)
-    #[arg(short, long, default_value = "verify.yaml")]
+    #[arg(short, long, default_value = "verify.yaml", global = true)]
     pub config: PathBuf,
 
     /// Output in JSON format
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub json: bool,
 
     /// Verbose output
@@ -18,7 +18,7 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Stage verify.lock after successful run (for git hooks)
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub stage: bool,
 
     #[command(subcommand)]
