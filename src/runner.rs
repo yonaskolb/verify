@@ -1,4 +1,4 @@
-use crate::cache::{CacheState, StalenessReason, StalenessStatus};
+use crate::cache::{CacheState, UnverifiedReason, VerificationStatus};
 use crate::config::{Config, Subproject, Verification, VerificationItem};
 use crate::graph::DependencyGraph;
 use crate::hasher::{HashResult, compute_check_hash, find_changed_files};
@@ -110,18 +110,18 @@ fn execute_command(
     }
 }
 
-/// Compute staleness for a check, considering dependencies
-fn compute_staleness(
+/// Compute verification status for a check, considering dependencies
+fn compute_status(
     check: &Verification,
     hash_result: &HashResult,
     cache: &CacheState,
     dep_staleness: &HashMap<String, bool>,
-) -> StalenessStatus {
-    // First check if any dependency is stale
+) -> VerificationStatus {
+    // First check if any dependency is unverified
     for dep in &check.depends_on {
         if dep_staleness.get(dep).copied().unwrap_or(true) {
-            return StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale {
+            return VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified {
                     dependency: dep.clone(),
                 },
             };
@@ -130,29 +130,27 @@ fn compute_staleness(
 
     // Aggregate checks (no command): status is derived purely from dependencies
     if check.command.is_none() {
-        return StalenessStatus::Fresh;
+        return VerificationStatus::Verified;
     }
 
-    // If no cache_paths defined, always run (rely on command's own caching)
+    // If no cache_paths defined, changes can't be tracked
     if check.cache_paths.is_empty() {
-        return StalenessStatus::Stale {
-            reason: StalenessReason::NoCachePaths,
-        };
+        return VerificationStatus::Untracked;
     }
 
     // Then check file changes and config changes
     let config_hash = check.config_hash();
     let status = cache.check_staleness(&check.name, &hash_result.combined_hash, &config_hash);
 
-    // Enrich with changed files if stale due to files
+    // Enrich with changed files if unverified due to files
     match &status {
-        StalenessStatus::Stale {
-            reason: StalenessReason::FilesChanged { .. },
+        VerificationStatus::Unverified {
+            reason: UnverifiedReason::FilesChanged { .. },
         } => {
             if let Some(cached) = cache.get(&check.name) {
                 let changed = find_changed_files(&cached.file_hashes, &hash_result.file_hashes);
-                StalenessStatus::Stale {
-                    reason: StalenessReason::FilesChanged {
+                VerificationStatus::Unverified {
+                    reason: UnverifiedReason::FilesChanged {
                         changed_files: changed,
                     },
                 }
@@ -219,6 +217,21 @@ fn run_status_recursive(
     // Track which checks are stale (for dependency propagation)
     let mut is_stale: HashMap<String, bool> = HashMap::new();
 
+    // Pre-compute subproject staleness so verifications that depend on them
+    // can correctly determine their own status
+    for item in &config.verifications {
+        if let VerificationItem::Subproject(s) = item {
+            let subproject_dir = project_root.join(&s.path);
+            let sub_config_path = subproject_dir.join("verify.yaml");
+            if sub_config_path.exists() {
+                let sub_config = Config::load_with_base(&sub_config_path, &subproject_dir)?;
+                let sub_cache = CacheState::load(&subproject_dir)?;
+                let has_stale = check_has_stale(&subproject_dir, &sub_config, &sub_cache)?;
+                is_stale.insert(s.name.clone(), has_stale);
+            }
+        }
+    }
+
     // Process verifications in execution order
     let waves = graph.execution_waves();
     let mut status_items: Vec<StatusItemJson> = Vec::new();
@@ -230,30 +243,21 @@ fn run_status_recursive(
     }
 
     // Process all verifications first (in wave order for dependency propagation)
-    let mut verification_statuses: HashMap<String, (StalenessStatus, Option<CheckStatusJson>)> =
+    let mut verification_statuses: HashMap<String, (VerificationStatus, CheckStatusJson)> =
         HashMap::new();
 
     for wave in waves {
         for name in wave {
             let check = config.get(&name).unwrap();
             let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
-            let staleness = compute_staleness(check, &hash_result, cache, &is_stale);
+            let status = compute_status(check, &hash_result, cache, &is_stale);
 
             // Record staleness for dependent checks
-            is_stale.insert(name.clone(), !matches!(staleness, StalenessStatus::Fresh));
+            is_stale.insert(name.clone(), !matches!(status, VerificationStatus::Verified));
 
-            let json_item = match &staleness {
-                StalenessStatus::Fresh => {
-                    let cached = cache.get(&name).unwrap();
-                    Some(CheckStatusJson::fresh(&name, cached))
-                }
-                StalenessStatus::Stale { reason } => {
-                    Some(CheckStatusJson::stale(&name, reason, cache.get(&name)))
-                }
-                StalenessStatus::NeverRun => Some(CheckStatusJson::never_run(&name)),
-            };
+            let json_item = CheckStatusJson::from_status(&name, &status, cache.get(&name));
 
-            verification_statuses.insert(name.clone(), (staleness, json_item));
+            verification_statuses.insert(name.clone(), (status, json_item));
         }
     }
 
@@ -261,24 +265,12 @@ fn run_status_recursive(
     for item in &config.verifications {
         match item {
             VerificationItem::Verification(v) => {
-                let (staleness, json_item) = verification_statuses.remove(&v.name).unwrap();
+                let (status, json_item) = verification_statuses.remove(&v.name).unwrap();
 
                 if json {
-                    if let Some(item) = json_item {
-                        status_items.push(StatusItemJson::Check(item));
-                    }
+                    status_items.push(StatusItemJson::Check(json_item));
                 } else {
-                    match &staleness {
-                        StalenessStatus::Fresh => {
-                            ui.print_status_fresh_indented(&v.name, indent);
-                        }
-                        StalenessStatus::Stale { reason } => {
-                            ui.print_status_stale_indented(&v.name, reason, indent);
-                        }
-                        StalenessStatus::NeverRun => {
-                            ui.print_status_never_run_indented(&v.name, indent);
-                        }
-                    }
+                    ui.print_status(&v.name, &status, indent);
                 }
             }
             VerificationItem::Subproject(s) => {
@@ -330,7 +322,7 @@ fn run_status_subproject(
     )
 }
 
-/// Check if a config has any stale checks
+/// Check if a config has any unverified checks
 fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> Result<bool> {
     let graph = DependencyGraph::from_config(config)?;
     let mut is_stale: HashMap<String, bool> = HashMap::new();
@@ -339,8 +331,8 @@ fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> 
         for name in wave {
             if let Some(check) = config.get(&name) {
                 let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
-                let staleness = compute_staleness(check, &hash_result, cache, &is_stale);
-                let stale = !matches!(staleness, StalenessStatus::Fresh);
+                let status = compute_status(check, &hash_result, cache, &is_stale);
+                let stale = !matches!(status, VerificationStatus::Verified);
                 is_stale.insert(name.clone(), stale);
                 if stale {
                     return Ok(true);
@@ -575,9 +567,9 @@ fn execute_verification(
     let dep_staleness: HashMap<String, bool> =
         executed.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
-    let staleness = if dep_failed {
-        StalenessStatus::Stale {
-            reason: StalenessReason::DependencyStale {
+    let status = if dep_failed {
+        VerificationStatus::Unverified {
+            reason: UnverifiedReason::DependencyUnverified {
                 dependency: check
                     .depends_on
                     .iter()
@@ -587,7 +579,7 @@ fn execute_verification(
             },
         }
     } else {
-        compute_staleness(check, &hash_result, cache, &dep_staleness)
+        compute_status(check, &hash_result, cache, &dep_staleness)
     };
 
     // Aggregate checks (no command): pass/fail derived from dependencies
@@ -624,7 +616,7 @@ fn execute_verification(
         return Ok(());
     }
 
-    let should_run = force || !matches!(staleness, StalenessStatus::Fresh);
+    let should_run = force || !matches!(status, VerificationStatus::Verified);
 
     if !should_run {
         // Skip - cache fresh, show with in-place green indicator
@@ -655,7 +647,7 @@ fn execute_verification(
             check,
             cache,
             &hash_result,
-            &staleness,
+            &status,
             json,
             ui,
             indent,
@@ -774,7 +766,7 @@ fn execute_per_file(
     check: &Verification,
     cache: &mut CacheState,
     hash_result: &HashResult,
-    _staleness: &StalenessStatus,
+    _status: &VerificationStatus,
     json: bool,
     ui: &Ui,
     indent: usize,
@@ -1129,15 +1121,15 @@ mod tests {
         let mut dep_staleness = HashMap::new();
         dep_staleness.insert("build".to_string(), true); // dependency is stale
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale { dependency },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified { dependency },
             } => {
                 assert_eq!(dependency, "build");
             }
-            other => panic!("Expected DependencyStale, got {:?}", other),
+            other => panic!("Expected DependencyUnverified, got {:?}", other),
         }
     }
 
@@ -1151,10 +1143,10 @@ mod tests {
         let mut dep_staleness = HashMap::new();
         dep_staleness.insert("build".to_string(), false); // dependency is fresh
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        // Should be NeverRun since cache is empty (not DependencyStale)
-        assert_eq!(result, StalenessStatus::NeverRun);
+        // Should be NeverRun since cache is empty (not DependencyUnverified)
+        assert_eq!(result, VerificationStatus::Unverified { reason: UnverifiedReason::NeverRun });
     }
 
     #[test]
@@ -1169,15 +1161,15 @@ mod tests {
         dep_staleness.insert("lint".to_string(), true); // this one is stale
         dep_staleness.insert("format".to_string(), false);
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale { dependency },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified { dependency },
             } => {
                 assert_eq!(dependency, "lint");
             }
-            other => panic!("Expected DependencyStale(lint), got {:?}", other),
+            other => panic!("Expected DependencyUnverified(lint), got {:?}", other),
         }
     }
 
@@ -1190,39 +1182,33 @@ mod tests {
 
         let dep_staleness = HashMap::new(); // empty - unknown_dep not present
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale { dependency },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified { dependency },
             } => {
                 assert_eq!(dependency, "unknown_dep");
             }
-            other => panic!("Expected DependencyStale(unknown_dep), got {:?}", other),
+            other => panic!("Expected DependencyUnverified(unknown_dep), got {:?}", other),
         }
     }
 
     #[test]
     fn test_compute_staleness_no_cache_paths() {
-        // When cache_paths is empty, always return NoCachePaths
+        // When cache_paths is empty, return Untracked
         let check = make_verification("test", vec![], vec![]); // no cache_paths
         let hash_result = make_hash_result("hash123", vec![]);
         let cache = CacheState::new();
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
-
-        match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::NoCachePaths,
-            } => {}
-            other => panic!("Expected NoCachePaths, got {:?}", other),
-        }
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
+        assert_eq!(result, VerificationStatus::Untracked);
     }
 
     #[test]
     fn test_compute_staleness_no_cache_paths_with_fresh_deps() {
-        // Even with fresh dependencies, no cache_paths means always run
+        // Even with fresh dependencies, no cache_paths means untracked
         let check = make_verification("test", vec![], vec!["build"]);
         let hash_result = make_hash_result("hash123", vec![]);
         let cache = CacheState::new();
@@ -1230,14 +1216,8 @@ mod tests {
         let mut dep_staleness = HashMap::new();
         dep_staleness.insert("build".to_string(), false);
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
-
-        match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::NoCachePaths,
-            } => {}
-            other => panic!("Expected NoCachePaths, got {:?}", other),
-        }
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
+        assert_eq!(result, VerificationStatus::Untracked);
     }
 
     #[test]
@@ -1252,8 +1232,8 @@ mod tests {
         dep_staleness.insert("build".to_string(), false);
         dep_staleness.insert("test".to_string(), false);
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
-        assert_eq!(result, StalenessStatus::Fresh);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
+        assert_eq!(result, VerificationStatus::Verified);
     }
 
     #[test]
@@ -1268,14 +1248,14 @@ mod tests {
         dep_staleness.insert("build".to_string(), true);
         dep_staleness.insert("test".to_string(), false);
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale { dependency },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified { dependency },
             } => {
                 assert_eq!(dependency, "build");
             }
-            other => panic!("Expected DependencyStale, got {:?}", other),
+            other => panic!("Expected DependencyUnverified, got {:?}", other),
         }
     }
 
@@ -1287,9 +1267,9 @@ mod tests {
         let cache = CacheState::new(); // empty cache
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        assert_eq!(result, StalenessStatus::NeverRun);
+        assert_eq!(result, VerificationStatus::Unverified { reason: UnverifiedReason::NeverRun });
     }
 
     #[test]
@@ -1312,9 +1292,9 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        assert_eq!(result, StalenessStatus::Fresh);
+        assert_eq!(result, VerificationStatus::Verified);
     }
 
     #[test]
@@ -1339,11 +1319,11 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::FilesChanged { changed_files },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::FilesChanged { changed_files },
             } => {
                 // find_changed_files returns "M file" for modified files
                 assert!(changed_files.contains(&"M src/main.rs".to_string()));
@@ -1372,11 +1352,11 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::ConfigChanged,
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::ConfigChanged,
             } => {}
             other => panic!("Expected ConfigChanged, got {:?}", other),
         }
@@ -1403,16 +1383,16 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         // After failure, content_hash is None, so it's NeverRun
-        assert_eq!(result, StalenessStatus::NeverRun);
+        assert_eq!(result, VerificationStatus::Unverified { reason: UnverifiedReason::NeverRun });
     }
 
     #[test]
     fn test_compute_staleness_dependency_checked_before_cache_paths() {
         // Dependency staleness should be checked before checking empty cache_paths
-        // This is important: even with no cache_paths, if dep is stale we report DependencyStale
+        // This is important: even with no cache_paths, if dep is unverified we report DependencyUnverified
         let check = make_verification("test", vec![], vec!["build"]); // no cache_paths
         let hash_result = make_hash_result("hash123", vec![]);
         let cache = CacheState::new();
@@ -1420,16 +1400,16 @@ mod tests {
         let mut dep_staleness = HashMap::new();
         dep_staleness.insert("build".to_string(), true); // dependency stale
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        // Should be DependencyStale, not NoCachePaths
+        // Should be DependencyUnverified, not Untracked
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::DependencyStale { dependency },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::DependencyUnverified { dependency },
             } => {
                 assert_eq!(dependency, "build");
             }
-            other => panic!("Expected DependencyStale, got {:?}", other),
+            other => panic!("Expected DependencyUnverified, got {:?}", other),
         }
     }
 
@@ -1467,11 +1447,11 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
         match result {
-            StalenessStatus::Stale {
-                reason: StalenessReason::FilesChanged { changed_files },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::FilesChanged { changed_files },
             } => {
                 // find_changed_files returns "M file" for modified files
                 assert_eq!(changed_files.len(), 2);
@@ -1504,9 +1484,9 @@ mod tests {
 
         let dep_staleness = HashMap::new();
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        assert_eq!(result, StalenessStatus::Fresh);
+        assert_eq!(result, VerificationStatus::Verified);
     }
 
     #[test]
@@ -1531,9 +1511,9 @@ mod tests {
         dep_staleness.insert("build".to_string(), false);
         dep_staleness.insert("lint".to_string(), false);
 
-        let result = compute_staleness(&check, &hash_result, &cache, &dep_staleness);
+        let result = compute_status(&check, &hash_result, &cache, &dep_staleness);
 
-        assert_eq!(result, StalenessStatus::Fresh);
+        assert_eq!(result, VerificationStatus::Verified);
     }
 
     // ==================== execute_command tests ====================

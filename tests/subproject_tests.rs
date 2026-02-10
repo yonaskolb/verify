@@ -126,7 +126,7 @@ fn test_subproject_cache_isolation() {
     let (_, stdout_a, _) = project.run_in_subproject("packages/a", &["status"]);
 
     assert!(
-        stdout_a.contains("stale") || stdout_a.contains("changed"),
+        stdout_a.contains("unverified") || stdout_a.contains("changed"),
         "Subproject A should be stale: {}",
         stdout_a
     );
@@ -363,6 +363,246 @@ fn test_status_json_includes_subprojects() {
     assert!(
         has_subproject,
         "JSON status should include subproject: {}",
+        stdout
+    );
+}
+
+// ==================== Subproject Status Propagation Tests ====================
+
+#[test]
+fn test_status_verification_verified_when_subproject_verified() {
+    // A verification depending on a subproject should be "verified"
+    // when all the subproject's checks are verified
+    let project = TestProject::new(
+        r#"verifications:
+  - name: backend
+    path: packages/backend
+  - name: integration_test
+    command: echo "integration"
+    depends_on: [backend]
+    cache_paths:
+      - "*.txt"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/backend",
+        r#"verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.rs"
+"#,
+    );
+
+    project.create_file("test.txt", "root content");
+    project.create_subproject_file("packages/backend", "lib.rs", "fn main() {}");
+
+    // Run everything first so caches are populated
+    let (success, _, _) = project.run(&["run"]);
+    assert!(success);
+
+    // Now check status — integration_test should be verified (not "depends on: backend")
+    let (_, stdout, _) = project.run(&["status"]);
+
+    assert!(
+        stdout.contains("integration_test") && stdout.contains("verified"),
+        "integration_test should show as verified: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("depends on: backend"),
+        "integration_test should NOT show dependency unverified: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_status_verification_unverified_when_subproject_unverified() {
+    // A verification depending on a subproject should be "unverified"
+    // when the subproject has checks that haven't been run yet
+    let project = TestProject::new(
+        r#"verifications:
+  - name: backend
+    path: packages/backend
+  - name: integration_test
+    command: echo "integration"
+    depends_on: [backend]
+    cache_paths:
+      - "*.txt"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/backend",
+        r#"verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.rs"
+"#,
+    );
+
+    project.create_file("test.txt", "root content");
+    project.create_subproject_file("packages/backend", "lib.rs", "fn main() {}");
+
+    // Don't run anything — subproject checks are never-run
+    let (_, stdout, _) = project.run(&["status"]);
+
+    assert!(
+        stdout.contains("integration_test") && stdout.contains("unverified"),
+        "integration_test should show as unverified: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_status_aggregate_verified_when_subprojects_verified() {
+    // An aggregate check (no command) depending on subprojects should be "verified"
+    // when all subproject checks are verified
+    let project = TestProject::new(
+        r#"verifications:
+  - name: frontend
+    path: packages/frontend
+  - name: backend
+    path: packages/backend
+  - name: all
+    depends_on: [frontend, backend]
+"#,
+    );
+
+    project.add_subproject(
+        "packages/frontend",
+        r#"verifications:
+  - name: build
+    command: echo "frontend build"
+    cache_paths:
+      - "*.js"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/backend",
+        r#"verifications:
+  - name: build
+    command: echo "backend build"
+    cache_paths:
+      - "*.rs"
+"#,
+    );
+
+    project.create_subproject_file("packages/frontend", "app.js", "console.log('hi')");
+    project.create_subproject_file("packages/backend", "main.rs", "fn main() {}");
+
+    // Run everything
+    let (success, _, _) = project.run(&["run"]);
+    assert!(success);
+
+    // Status: aggregate "all" should be verified
+    let (_, stdout, _) = project.run(&["status"]);
+
+    // Find the "all" line - should say verified, not unverified
+    let all_line = stdout.lines().find(|l| l.contains("all") && !l.contains("all-")).unwrap_or("");
+    assert!(
+        all_line.contains("verified") && !all_line.contains("unverified"),
+        "Aggregate 'all' should be verified: '{}'.\nFull output:\n{}",
+        all_line,
+        stdout
+    );
+}
+
+#[test]
+fn test_status_aggregate_unverified_when_subproject_unverified() {
+    // An aggregate check (no command) depending on subprojects should be "unverified"
+    // when any subproject has unverified checks
+    let project = TestProject::new(
+        r#"verifications:
+  - name: frontend
+    path: packages/frontend
+  - name: backend
+    path: packages/backend
+  - name: all
+    depends_on: [frontend, backend]
+"#,
+    );
+
+    project.add_subproject(
+        "packages/frontend",
+        r#"verifications:
+  - name: build
+    command: echo "frontend build"
+    cache_paths:
+      - "*.js"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/backend",
+        r#"verifications:
+  - name: build
+    command: echo "backend build"
+    cache_paths:
+      - "*.rs"
+"#,
+    );
+
+    project.create_subproject_file("packages/frontend", "app.js", "console.log('hi')");
+    project.create_subproject_file("packages/backend", "main.rs", "fn main() {}");
+
+    // Don't run — subproject checks never run
+    let (_, stdout, _) = project.run(&["status"]);
+
+    let all_line = stdout.lines().find(|l| l.contains("all") && !l.contains("all-")).unwrap_or("");
+    assert!(
+        all_line.contains("unverified"),
+        "Aggregate 'all' should be unverified when subprojects haven't run: '{}'.\nFull output:\n{}",
+        all_line,
+        stdout
+    );
+}
+
+#[test]
+fn test_status_subproject_stale_after_file_change_propagates() {
+    // After modifying a file in a subproject, verifications depending on
+    // that subproject should show as unverified
+    let project = TestProject::new(
+        r#"verifications:
+  - name: lib
+    path: packages/lib
+  - name: integration
+    command: echo "integration"
+    depends_on: [lib]
+    cache_paths:
+      - "*.txt"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/lib",
+        r#"verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.rs"
+"#,
+    );
+
+    project.create_file("test.txt", "content");
+    project.create_subproject_file("packages/lib", "lib.rs", "fn lib() {}");
+
+    // Run everything first
+    let (success, _, _) = project.run(&["run"]);
+    assert!(success);
+
+    // Modify a subproject file
+    project.create_subproject_file("packages/lib", "lib.rs", "fn lib_v2() {}");
+
+    // Status: integration should now be unverified because lib is stale
+    let (_, stdout, _) = project.run(&["status"]);
+
+    assert!(
+        stdout.contains("integration") && stdout.contains("unverified"),
+        "integration should be unverified after subproject file change: {}",
         stdout
     );
 }

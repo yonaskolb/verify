@@ -1,4 +1,4 @@
-use crate::cache::StalenessReason;
+use crate::cache::{UnverifiedReason, VerificationStatus};
 use crate::metadata::{MetadataValue, compute_delta};
 use crate::output::format_duration;
 use console::{Term, style};
@@ -53,74 +53,54 @@ impl Ui {
         println!("{}{} {}", prefix, icon_style, style(name).bold());
     }
 
-    /// Print status for a fresh check
-    #[allow(dead_code)]
-    pub fn print_status_fresh(&self, name: &str) {
-        self.print_status_fresh_indented(name, 0);
-    }
-
-    /// Print status for a fresh check with indentation
-    pub fn print_status_fresh_indented(&self, name: &str, indent: usize) {
+    /// Print status for a check
+    pub fn print_status(&self, name: &str, status: &VerificationStatus, indent: usize) {
         let prefix = Self::indent_str(indent);
-        println!(
-            "{}{} {} - {}",
-            prefix,
-            style(ICON_CIRCLE).green().bold(),
-            style(name).bold(),
-            style("fresh").green()
-        );
-    }
-
-    /// Print status for a stale check
-    #[allow(dead_code)]
-    pub fn print_status_stale(&self, name: &str, reason: &StalenessReason) {
-        self.print_status_stale_indented(name, reason, 0);
-    }
-
-    /// Print status for a stale check with indentation
-    pub fn print_status_stale_indented(&self, name: &str, reason: &StalenessReason, indent: usize) {
-        let prefix = Self::indent_str(indent);
-        let reason_str = match reason {
-            StalenessReason::FilesChanged { changed_files } => {
-                if changed_files.is_empty() {
-                    "files changed".to_string()
-                } else {
-                    format!("{} file(s) changed", changed_files.len())
-                }
+        match status {
+            VerificationStatus::Verified => {
+                println!(
+                    "{}{} {} - {}",
+                    prefix,
+                    style(ICON_CIRCLE).green().bold(),
+                    style(name).bold(),
+                    style("verified").green()
+                );
             }
-            StalenessReason::DependencyStale { dependency } => {
-                format!("depends on: {}", dependency)
+            VerificationStatus::Unverified { reason } => {
+                let reason_str = match reason {
+                    UnverifiedReason::FilesChanged { changed_files } => {
+                        if changed_files.is_empty() {
+                            "files changed".to_string()
+                        } else {
+                            format!("{} file(s) changed", changed_files.len())
+                        }
+                    }
+                    UnverifiedReason::DependencyUnverified { dependency } => {
+                        format!("depends on: {}", dependency)
+                    }
+                    UnverifiedReason::ConfigChanged => "config changed".to_string(),
+                    UnverifiedReason::NeverRun => "never run".to_string(),
+                };
+
+                println!(
+                    "{}{} {} - {} ({})",
+                    prefix,
+                    style(ICON_CIRCLE).yellow().bold(),
+                    style(name).bold(),
+                    style("unverified").yellow(),
+                    reason_str
+                );
             }
-            StalenessReason::ConfigChanged => "config changed".to_string(),
-            StalenessReason::NoCachePaths => "no cache paths".to_string(),
-        };
-
-        println!(
-            "{}{} {} - {} ({})",
-            prefix,
-            style(ICON_CIRCLE).yellow().bold(),
-            style(name).bold(),
-            style("stale").yellow(),
-            reason_str
-        );
-    }
-
-    /// Print status for a never-run check
-    #[allow(dead_code)]
-    pub fn print_status_never_run(&self, name: &str) {
-        self.print_status_never_run_indented(name, 0);
-    }
-
-    /// Print status for a never-run check with indentation
-    pub fn print_status_never_run_indented(&self, name: &str, indent: usize) {
-        let prefix = Self::indent_str(indent);
-        println!(
-            "{}{} {} - {}",
-            prefix,
-            style(ICON_CIRCLE).dim(),
-            style(name).bold(),
-            style("never run").dim()
-        );
+            VerificationStatus::Untracked => {
+                println!(
+                    "{}{} {} - {}",
+                    prefix,
+                    style(ICON_CIRCLE).dim(),
+                    style(name).bold(),
+                    style("untracked").dim()
+                );
+            }
+        }
     }
 
     /// Print when a check is skipped (cache fresh)

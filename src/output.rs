@@ -1,4 +1,4 @@
-use crate::cache::StalenessReason;
+use crate::cache::{UnverifiedReason, VerificationStatus};
 use crate::metadata::{MetadataValue, compute_delta};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -51,52 +51,52 @@ pub struct CheckStatusJson {
 }
 
 impl CheckStatusJson {
-    pub fn fresh(name: &str, _cache: &crate::cache::CheckCache) -> Self {
-        Self {
-            name: name.to_string(),
-            status: "fresh".to_string(),
-            reason: None,
-            stale_dependency: None,
-            changed_files: None,
-        }
-    }
-
-    pub fn stale(
+    pub fn from_status(
         name: &str,
-        reason: &StalenessReason,
+        status: &VerificationStatus,
         _cache: Option<&crate::cache::CheckCache>,
     ) -> Self {
-        let (reason_str, stale_dep, changed_files) = match reason {
-            StalenessReason::FilesChanged { changed_files } => (
-                Some("files_changed".to_string()),
-                None,
-                Some(changed_files.clone()),
-            ),
-            StalenessReason::DependencyStale { dependency } => (
-                Some("dependency_stale".to_string()),
-                Some(dependency.clone()),
-                None,
-            ),
-            StalenessReason::ConfigChanged => (Some("config_changed".to_string()), None, None),
-            StalenessReason::NoCachePaths => (Some("no_cache_paths".to_string()), None, None),
-        };
+        match status {
+            VerificationStatus::Verified => Self {
+                name: name.to_string(),
+                status: "verified".to_string(),
+                reason: None,
+                stale_dependency: None,
+                changed_files: None,
+            },
+            VerificationStatus::Unverified { reason } => {
+                let (reason_str, stale_dep, changed_files) = match reason {
+                    UnverifiedReason::FilesChanged { changed_files } => (
+                        Some("files_changed".to_string()),
+                        None,
+                        Some(changed_files.clone()),
+                    ),
+                    UnverifiedReason::DependencyUnverified { dependency } => (
+                        Some("dependency_unverified".to_string()),
+                        Some(dependency.clone()),
+                        None,
+                    ),
+                    UnverifiedReason::ConfigChanged => {
+                        (Some("config_changed".to_string()), None, None)
+                    }
+                    UnverifiedReason::NeverRun => (Some("never_run".to_string()), None, None),
+                };
 
-        Self {
-            name: name.to_string(),
-            status: "stale".to_string(),
-            reason: reason_str,
-            stale_dependency: stale_dep,
-            changed_files,
-        }
-    }
-
-    pub fn never_run(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            status: "never_run".to_string(),
-            reason: None,
-            stale_dependency: None,
-            changed_files: None,
+                Self {
+                    name: name.to_string(),
+                    status: "unverified".to_string(),
+                    reason: reason_str,
+                    stale_dependency: stale_dep,
+                    changed_files,
+                }
+            }
+            VerificationStatus::Untracked => Self {
+                name: name.to_string(),
+                status: "untracked".to_string(),
+                reason: None,
+                stale_dependency: None,
+                changed_files: None,
+            },
         }
     }
 }

@@ -215,7 +215,7 @@ verifications:
     let (success, stdout, _) = project.run(&["status"]);
     assert!(success);
     assert!(
-        stdout.contains("config") || stdout.contains("stale"),
+        stdout.contains("config") || stdout.contains("unverified"),
         "Should indicate config changed: {}",
         stdout
     );
@@ -254,7 +254,7 @@ verifications:
     let (success, stdout, _) = project.run(&["status"]);
     assert!(success);
     assert!(
-        stdout.contains("config") || stdout.contains("stale"),
+        stdout.contains("config") || stdout.contains("unverified"),
         "Should indicate config changed: {}",
         stdout
     );
@@ -293,7 +293,7 @@ verifications:
     let (success, stdout, _) = project.run(&["status"]);
     assert!(success);
     assert!(
-        stdout.contains("config") || stdout.contains("stale"),
+        stdout.contains("config") || stdout.contains("unverified"),
         "Should indicate config changed: {}",
         stdout
     );
@@ -332,7 +332,7 @@ verifications:
     let (success, stdout, _) = project.run(&["status"]);
     assert!(success);
     assert!(
-        stdout.contains("config") || stdout.contains("stale"),
+        stdout.contains("config") || stdout.contains("unverified"),
         "Should indicate config changed: {}",
         stdout
     );
@@ -521,11 +521,11 @@ verifications:
     let (success1, _, _) = project.run(&["run"]);
     assert!(success1);
 
-    // Status should show stale (NoCachePaths)
+    // Status should show untracked (no cache_paths)
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("no cache"),
-        "Should always be stale with no cache_paths: {}",
+        stdout.contains("unverified") || stdout.contains("untracked"),
+        "Should be untracked with no cache_paths: {}",
         stdout
     );
 
@@ -563,7 +563,7 @@ verifications:
     // Should be stale
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("changed"),
+        stdout.contains("unverified") || stdout.contains("changed"),
         "Should be stale when file added: {}",
         stdout
     );
@@ -591,7 +591,7 @@ verifications:
     // Should be stale
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("changed"),
+        stdout.contains("unverified") || stdout.contains("changed"),
         "Should be stale when file removed: {}",
         stdout
     );
@@ -618,7 +618,7 @@ verifications:
     // Should be stale
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("stale") || stdout.contains("changed"),
+        stdout.contains("unverified") || stdout.contains("changed"),
         "Should be stale when file modified: {}",
         stdout
     );
@@ -645,8 +645,8 @@ verifications:
     // Should still be fresh (content hash same)
     let (_, stdout, _) = project.run(&["status"]);
     assert!(
-        stdout.contains("fresh") || stdout.contains("✓"),
-        "Should be fresh when content unchanged: {}",
+        stdout.contains("verified") || stdout.contains("✓"),
+        "Should be verified when content unchanged: {}",
         stdout
     );
 }

@@ -218,7 +218,7 @@ verifications:
     // Get status - should show stale
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
     assert!(success);
-    assert!(stdout.contains("stale") || stdout.contains("changed") || !stdout.contains("fresh"));
+    assert!(stdout.contains("unverified") || stdout.contains("changed") || !stdout.contains("verified"));
 }
 
 #[test]
@@ -344,7 +344,7 @@ verifications:
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
 
     assert!(success);
-    assert!(stdout.contains("never") || stdout.contains("stale") || stdout.contains("✗"));
+    assert!(stdout.contains("unverified") || stdout.contains("unverified") || stdout.contains("✗"));
 }
 
 #[test]
@@ -366,7 +366,7 @@ verifications:
     let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["status"]);
 
     assert!(success);
-    assert!(stdout.contains("fresh") || stdout.contains("✓"));
+    assert!(stdout.contains("verified") || stdout.contains("✓"));
 }
 
 #[test]

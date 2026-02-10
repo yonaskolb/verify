@@ -42,28 +42,28 @@ pub struct CheckCache {
     pub metadata: BTreeMap<String, MetadataValue>,
 }
 
-/// Computed staleness status for a check
+/// Computed verification status for a check
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StalenessStatus {
-    /// Files have changed since last successful run
-    Stale { reason: StalenessReason },
-    /// No changes since last successful run
-    Fresh,
-    /// Never run or no successful run recorded
-    NeverRun,
+pub enum VerificationStatus {
+    /// Check passed and nothing has changed since
+    Verified,
+    /// Check needs to run
+    Unverified { reason: UnverifiedReason },
+    /// Check has no cache_paths so changes can't be tracked
+    Untracked,
 }
 
-/// Reason why a check is stale
+/// Reason why a check is unverified
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StalenessReason {
+pub enum UnverifiedReason {
     /// Files in cache_paths have changed
     FilesChanged { changed_files: Vec<String> },
-    /// A dependency is stale
-    DependencyStale { dependency: String },
+    /// A dependency is unverified
+    DependencyUnverified { dependency: String },
     /// The check definition changed in verify.yaml
     ConfigChanged,
-    /// No cache_paths defined - always run
-    NoCachePaths,
+    /// Never run or no successful run recorded
+    NeverRun,
 }
 
 impl CacheState {
@@ -119,23 +119,29 @@ impl CacheState {
         Ok(())
     }
 
-    /// Determine if a check is stale based on current content hash and config hash
+    /// Determine verification status based on current content hash and config hash
     pub fn check_staleness(
         &self,
         check_name: &str,
         current_content_hash: &str,
         current_config_hash: &str,
-    ) -> StalenessStatus {
+    ) -> VerificationStatus {
         match self.checks.get(check_name) {
-            None => StalenessStatus::NeverRun,
+            None => VerificationStatus::Unverified {
+                reason: UnverifiedReason::NeverRun,
+            },
             Some(cache) => {
-                // Check config hash first - if config changed, check is stale
+                // Check config hash first - if config changed, check is unverified
                 match &cache.config_hash {
-                    None => return StalenessStatus::NeverRun,
+                    None => {
+                        return VerificationStatus::Unverified {
+                            reason: UnverifiedReason::NeverRun,
+                        }
+                    }
                     Some(stored_config_hash) => {
                         if stored_config_hash != current_config_hash {
-                            return StalenessStatus::Stale {
-                                reason: StalenessReason::ConfigChanged,
+                            return VerificationStatus::Unverified {
+                                reason: UnverifiedReason::ConfigChanged,
                             };
                         }
                     }
@@ -143,13 +149,15 @@ impl CacheState {
 
                 // Then check content hash
                 match &cache.content_hash {
-                    None => StalenessStatus::NeverRun,
+                    None => VerificationStatus::Unverified {
+                        reason: UnverifiedReason::NeverRun,
+                    },
                     Some(stored_hash) => {
                         if stored_hash == current_content_hash {
-                            StalenessStatus::Fresh
+                            VerificationStatus::Verified
                         } else {
-                            StalenessStatus::Stale {
-                                reason: StalenessReason::FilesChanged {
+                            VerificationStatus::Unverified {
+                                reason: UnverifiedReason::FilesChanged {
                                     changed_files: vec![], // Will be filled in by caller if needed
                                 },
                             }
@@ -292,7 +300,9 @@ mod tests {
         let cache = CacheState::new();
         assert_eq!(
             cache.check_staleness("test", "somehash", "confighash"),
-            StalenessStatus::NeverRun
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::NeverRun
+            }
         );
     }
 
@@ -311,7 +321,7 @@ mod tests {
 
         assert_eq!(
             cache.check_staleness("test", "abc123", "confighash"),
-            StalenessStatus::Fresh
+            VerificationStatus::Verified
         );
     }
 
@@ -329,10 +339,10 @@ mod tests {
         );
 
         match cache.check_staleness("test", "different_hash", "confighash") {
-            StalenessStatus::Stale {
-                reason: StalenessReason::FilesChanged { .. },
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::FilesChanged { .. },
             } => {}
-            other => panic!("Expected Stale(FilesChanged), got {:?}", other),
+            other => panic!("Expected Unverified(FilesChanged), got {:?}", other),
         }
     }
 
@@ -350,10 +360,10 @@ mod tests {
         );
 
         match cache.check_staleness("test", "abc123", "different_config") {
-            StalenessStatus::Stale {
-                reason: StalenessReason::ConfigChanged,
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::ConfigChanged,
             } => {}
-            other => panic!("Expected Stale(ConfigChanged), got {:?}", other),
+            other => panic!("Expected Unverified(ConfigChanged), got {:?}", other),
         }
     }
 
@@ -370,10 +380,12 @@ mod tests {
             false,
         );
 
-        // After failure, content_hash is cleared, so it should be NeverRun
+        // After failure, content_hash is cleared, so it should be Unverified(NeverRun)
         assert_eq!(
             cache.check_staleness("test", "anyhash", "confighash"),
-            StalenessStatus::NeverRun
+            VerificationStatus::Unverified {
+                reason: UnverifiedReason::NeverRun
+            }
         );
     }
 
