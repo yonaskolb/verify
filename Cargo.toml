@@ -1,6 +1,6 @@
 [package]
 name = "verify"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "A CLI tool for managing project verification checks with intelligent caching"
 license = "MIT"
