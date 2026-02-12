@@ -70,6 +70,26 @@ pub enum Commands {
         #[arg(value_name = "NAME")]
         names: Vec<String>,
     },
+
+    /// Print combined verification hash for checks
+    Hash {
+        /// Specific check name to hash (omit for all checks)
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+    },
+
+    /// Sign a commit message with verification trailer
+    Sign {
+        /// Path to commit message file
+        file: PathBuf,
+    },
+
+    /// Validate HEAD commit trailer against current file state
+    Check {
+        /// Specific check name to validate (omit for all checks)
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+    },
 }
 
 impl Default for Commands {
