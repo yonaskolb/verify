@@ -492,39 +492,12 @@ fn execute_item_with_deps(
         return Ok(());
     }
 
-    // For verifications, first execute any dependencies
+    // For verifications, first execute any dependencies (including transitive deps)
     if let VerificationItem::Verification(v) = item {
         for dep_name in &v.depends_on {
-            // Check if dependency is a subproject
-            if let Some(sub) = config.get_subproject(dep_name) {
-                // Execute subproject if not already done (run all checks in the subproject)
-                if !executed.contains_key(dep_name) {
-                    let sub_results =
-                        run_checks_subproject(project_root, sub, &[], force, json, ui, indent)?;
-                    let had_failures = sub_results.failed > 0;
-                    executed.insert(dep_name.clone(), had_failures);
-                    results.add_subproject(
-                        dep_name,
-                        sub.path.to_string_lossy().as_ref(),
-                        sub_results,
-                    );
-                }
-            } else if let Some(dep_v) = config.get(dep_name) {
-                // Execute verification dependency if not already done
-                if !executed.contains_key(dep_name) {
-                    execute_verification(
-                        project_root,
-                        dep_v,
-                        cache,
-                        force,
-                        json,
-                        ui,
-                        indent,
-                        executed,
-                        results,
-                    )?;
-                }
-            }
+            resolve_and_execute_dep(
+                project_root, config, cache, dep_name, force, json, ui, indent, executed, results,
+            )?;
         }
     }
 
@@ -560,6 +533,56 @@ fn execute_item_with_deps(
                 results.add_subproject(&s.name, s.path.to_string_lossy().as_ref(), sub_results);
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Recursively resolve and execute a dependency and all its transitive dependencies.
+/// This ensures that when check A depends on B which depends on C, running A will
+/// first resolve C, then B, then A — so B sees C in the `executed` map.
+#[allow(clippy::too_many_arguments)]
+fn resolve_and_execute_dep(
+    project_root: &Path,
+    config: &Config,
+    cache: &mut CacheState,
+    dep_name: &str,
+    force: bool,
+    json: bool,
+    ui: &Ui,
+    indent: usize,
+    executed: &mut HashMap<String, bool>,
+    results: &mut RunResults,
+) -> Result<()> {
+    if executed.contains_key(dep_name) {
+        return Ok(());
+    }
+
+    if let Some(sub) = config.get_subproject(dep_name) {
+        let sub_results =
+            run_checks_subproject(project_root, sub, &[], force, json, ui, indent)?;
+        let had_failures = sub_results.failed > 0;
+        executed.insert(dep_name.to_string(), had_failures);
+        results.add_subproject(dep_name, sub.path.to_string_lossy().as_ref(), sub_results);
+    } else if let Some(dep_v) = config.get(dep_name) {
+        // Recursively resolve this dep's own dependencies first
+        for transitive_dep in &dep_v.depends_on.clone() {
+            resolve_and_execute_dep(
+                project_root,
+                config,
+                cache,
+                transitive_dep,
+                force,
+                json,
+                ui,
+                indent,
+                executed,
+                results,
+            )?;
+        }
+        execute_verification(
+            project_root, dep_v, cache, force, json, ui, indent, executed, results,
+        )?;
     }
 
     Ok(())

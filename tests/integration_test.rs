@@ -505,6 +505,72 @@ verifications:
     assert!(success2);
 }
 
+// ==================== Transitive Dependency Tests ====================
+
+#[test]
+fn test_run_specific_check_caches_transitive_deps() {
+    // Regression test: running a check with transitive deps (C -> B -> A)
+    // should use cache for already-verified transitive deps, not re-run them.
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "building"
+    cache_paths:
+      - "src/*.txt"
+  - name: previews
+    command: echo "recording previews"
+    depends_on: [build]
+    cache_paths:
+      - "src/*.txt"
+  - name: snapshots
+    command: echo "checking snapshot"
+    depends_on: [previews]
+    cache_paths:
+      - "out/*.txt"
+    per_file: true
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+    fs::create_dir_all(temp_dir.path().join("out")).unwrap();
+    fs::write(temp_dir.path().join("src/app.txt"), "source code").unwrap();
+    fs::write(temp_dir.path().join("out/snap.txt"), "snapshot").unwrap();
+
+    // Run all checks first to populate cache
+    let (success, _stdout, _stderr) = run_verify(temp_dir.path(), &["run"]);
+    assert!(success, "Initial run should succeed");
+
+    // Now modify only the snapshot output (not the source)
+    fs::write(temp_dir.path().join("out/snap.txt"), "changed snapshot").unwrap();
+
+    // Run only "snapshots" — build and previews should be cached, not re-run
+    let (success, stdout, _stderr) = run_verify(temp_dir.path(), &["--json", "run", "snapshots"]);
+    assert!(success, "Snapshot run should succeed");
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("Failed to parse JSON: {}. Output: {}", e, stdout));
+
+    // build and previews should be skipped (cached), not re-executed
+    if let Some(results) = parsed["results"].as_array() {
+        let build = results.iter().find(|r| r["name"] == "build");
+        let previews = results.iter().find(|r| r["name"] == "previews");
+
+        if let Some(build) = build {
+            assert_eq!(
+                build["result"], "skipped",
+                "build should be cached/skipped, got: {:?}",
+                build
+            );
+        }
+        if let Some(previews) = previews {
+            assert_eq!(
+                previews["result"], "skipped",
+                "previews should be cached/skipped, got: {:?}",
+                previews
+            );
+        }
+    }
+}
+
 // ==================== Error Handling Tests ====================
 
 #[test]
