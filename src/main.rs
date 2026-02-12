@@ -6,6 +6,7 @@ mod hasher;
 mod metadata;
 mod output;
 mod runner;
+mod trailer;
 mod ui;
 
 use anyhow::Result;
@@ -119,6 +120,63 @@ fn run() -> Result<i32> {
             }
 
             Ok(result)
+        }
+
+        Commands::Hash { name } => {
+            let config = config::Config::load(config_path)?;
+            let cache = cache::CacheState::load(&project_root)?;
+
+            let hashes = trailer::compute_all_hashes(&project_root, &config, &cache)?;
+
+            if let Some(ref check_name) = name {
+                if config.get(check_name).is_none() {
+                    anyhow::bail!("Unknown check: {}", check_name);
+                }
+                match hashes.get(check_name) {
+                    Some(hash) => {
+                        println!("{}", hash);
+                        Ok(0)
+                    }
+                    None => {
+                        anyhow::bail!("Could not compute hash for check '{}'", check_name);
+                    }
+                }
+            } else {
+                // All checks: output as name:hash,...
+                let output: Vec<String> = hashes
+                    .iter()
+                    .map(|(name, hash)| format!("{}:{}", name, hash))
+                    .collect();
+                println!("{}", output.join(","));
+                Ok(0)
+            }
+        }
+
+        Commands::Sign { file } => {
+            let config = config::Config::load(config_path)?;
+            let cache = cache::CacheState::load(&project_root)?;
+
+            let hashes = trailer::compute_all_hashes(&project_root, &config, &cache)?;
+            trailer::write_trailer(&file, &hashes)?;
+            Ok(0)
+        }
+
+        Commands::Check { name } => {
+            let config = config::Config::load(config_path)?;
+
+            if let Some(ref check_name) = name {
+                if config.get(check_name).is_none() {
+                    anyhow::bail!("Unknown check: {}", check_name);
+                }
+            }
+
+            let has_unverified =
+                runner::run_check_trailer(&project_root, &config, cli.json, name)?;
+            if has_unverified {
+                Ok(1)
+            } else {
+                Ok(0)
+            }
         }
     }
 }

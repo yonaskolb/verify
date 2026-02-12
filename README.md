@@ -328,9 +328,69 @@ verify --stage
 
 This ensures your verification state is included in the commit. The `--stage` flag runs `git add verify.lock` after successful verification.
 
+## Commit Trailer Workflow
+
+As an alternative to committing `verify.lock`, you can store verification proof in git commit trailers. This eliminates merge conflicts on `verify.lock` while still letting CI skip redundant checks.
+
+### How It Works
+
+Instead of committing `verify.lock`, each commit gets a `Verified` trailer containing a hash of each check's configuration and file state:
+
+```
+feat: add profile page
+
+Verified: build:a1b2c3d4,lint:e5f6a7b8,tests:c9d0e1f2
+```
+
+CI reads the trailer from the HEAD commit and compares it against the current file state. If the hashes match, the check is verified without re-running.
+
+### Setup
+
+Add `verify.lock` to `.gitignore` (it becomes a local-only cache):
+
+```bash
+echo "verify.lock" >> .gitignore
+```
+
+Set up git hooks to automatically add trailers:
+
+```bash
+#!/bin/sh
+# .git/hooks/pre-commit
+verify
+
+#!/bin/sh
+# .git/hooks/commit-msg
+verify sign "$1"
+```
+
+### CI Integration
+
+Replace `verify status --verify` with `verify check`:
+
+```bash
+# Check all trailers
+verify check
+
+# Check a specific check
+verify check tests
+```
+
+`verify check` exits 0 if the trailer matches current files, 1 if it doesn't or is missing.
+
+### Commands
+
+```bash
+verify hash              # Print combined hashes for all checks (full 64-char blake3)
+verify hash build        # Print hash for a specific check
+verify sign FILE         # Sign a commit message file with verification trailer
+verify check             # Validate HEAD trailer against current files
+verify check build       # Validate a specific check's trailer
+```
+
 ## Integration Ideas
 
-- **CI/CD**: Commit `verify.lock` to share verification state between local and CI - checks that passed locally won't re-run on CI
+- **CI/CD**: Use commit trailers (`verify check`) or commit `verify.lock` (`verify status --verify`) to share verification state between local and CI
 - **Agent tools**: Parse JSON output (`verify --json`) to show verification status in UIs
 - **Watch mode**: Combine with `watchexec` or similar
 

@@ -861,3 +861,534 @@ verifications:
     // Version should be current (4)
     assert_eq!(lock["version"], 4);
 }
+
+// ==================== Hash Command Tests ====================
+
+fn run_verify_exit_code(project_dir: &Path, args: &[&str]) -> i32 {
+    let binary = verify_binary();
+    let status = Command::new(&binary)
+        .args(args)
+        .current_dir(project_dir)
+        .status()
+        .unwrap_or_else(|e| panic!("Failed to execute verify at {:?}: {}", binary, e));
+    status.code().unwrap_or(-1)
+}
+
+#[test]
+fn test_hash_single_check() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    // Run to populate cache
+    let (success, _, _) = run_verify(temp_dir.path(), &["run"]);
+    assert!(success);
+
+    // Get hash
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["hash", "build"]);
+    assert!(success);
+    let hash = stdout.trim();
+    assert_eq!(hash.len(), 64, "Hash should be 64-char hex: {}", hash);
+
+    // Hash should be deterministic
+    let (_, stdout2, _) = run_verify(temp_dir.path(), &["hash", "build"]);
+    assert_eq!(hash, stdout2.trim());
+}
+
+#[test]
+fn test_hash_all_checks() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["hash"]);
+    assert!(success);
+    let output = stdout.trim();
+    // Format: name:hash,name:hash
+    assert!(output.contains("build:"), "Output: {}", output);
+    assert!(output.contains("lint:"), "Output: {}", output);
+    assert!(output.contains(','), "Should be comma-separated: {}", output);
+}
+
+#[test]
+fn test_hash_unknown_check() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths: ["*.txt"]
+"#;
+    let temp_dir = setup_test_project(config);
+
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["hash", "nonexistent"]);
+    assert_eq!(exit_code, 2);
+}
+
+#[test]
+fn test_hash_before_run_fails() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    // Try hash without running first
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["hash", "build"]);
+    assert_eq!(exit_code, 2, "Should exit 2 when check hasn't been run");
+}
+
+#[test]
+fn test_hash_excludes_aggregate_checks() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+  - name: all
+    depends_on: [build, lint]
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Hash all — aggregate "all" should be excluded
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["hash"]);
+    assert!(success);
+    let output = stdout.trim();
+    assert!(output.contains("build:"), "Output: {}", output);
+    assert!(output.contains("lint:"), "Output: {}", output);
+    assert!(!output.contains("all:"), "Aggregate should be excluded: {}", output);
+
+    // Hash specific aggregate — should fail
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["hash", "all"]);
+    assert_eq!(exit_code, 2, "Hashing aggregate should fail");
+}
+
+#[test]
+fn test_hash_changes_when_files_change() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content1").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+    let (_, stdout1, _) = run_verify(temp_dir.path(), &["hash", "build"]);
+
+    // Change file, re-run
+    fs::write(temp_dir.path().join("test.txt"), "content2").unwrap();
+    run_verify(temp_dir.path(), &["run"]);
+    let (_, stdout2, _) = run_verify(temp_dir.path(), &["hash", "build"]);
+
+    assert_ne!(stdout1.trim(), stdout2.trim());
+}
+
+#[test]
+fn test_hash_excludes_stale_checks() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Both checks are fresh — both should appear in hash output
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["hash"]);
+    assert!(success);
+    assert!(stdout.contains("build:"));
+    assert!(stdout.contains("lint:"));
+
+    // Change a file — both checks become stale
+    fs::write(temp_dir.path().join("test.txt"), "changed").unwrap();
+
+    // Hash specific stale check — should fail
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["hash", "build"]);
+    assert_eq!(exit_code, 2, "Stale check should not be hashable");
+
+    // Hash all — should produce empty output (no fresh checks)
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["hash"]);
+    assert!(success);
+    assert_eq!(stdout.trim(), "", "No fresh checks should produce empty output");
+}
+
+// ==================== Trailer Command Tests ====================
+
+/// Truncate hash values in "name:fullhash,name:fullhash" format to 8-char hashes
+/// to match the trailer format used by `verify trailer` and `verify check`.
+fn truncate_hash_output(output: &str) -> String {
+    output
+        .split(',')
+        .map(|pair| {
+            if let Some((name, hash)) = pair.split_once(':') {
+                format!("{}:{}", name, &hash[..8.min(hash.len())])
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Initialize a git repo in the given directory with an initial commit
+fn init_git_repo(dir: &Path) {
+    Command::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+}
+
+#[test]
+fn test_sign_writes_to_file() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Create a commit message file (not .txt to avoid matching cache_paths)
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: add feature\n").unwrap();
+
+    // Need git repo for git interpret-trailers
+    init_git_repo(temp_dir.path());
+
+    let (success, _, stderr) = run_verify(
+        temp_dir.path(),
+        &["sign", msg_file.to_str().unwrap()],
+    );
+    assert!(success, "sign command failed: {}", stderr);
+
+    let content = fs::read_to_string(&msg_file).unwrap();
+    assert!(content.contains("Verified:"), "Trailer not found in: {}", content);
+    assert!(content.contains("build:"), "Build hash not in trailer: {}", content);
+}
+
+#[test]
+fn test_sign_replaces_existing_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: add feature\n").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Sign twice — should replace, not duplicate
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+
+    let content = fs::read_to_string(&msg_file).unwrap();
+    let count = content.matches("Verified:").count();
+    assert_eq!(count, 1, "Should have exactly one Verified trailer, got {}: {}", count, content);
+}
+
+#[test]
+fn test_check_verified_with_matching_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    // Init git repo
+    init_git_repo(temp_dir.path());
+
+    // Run verify to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Get the trailer value (truncated to match trailer format)
+    let (_, hash_output, _) = run_verify(temp_dir.path(), &["hash"]);
+    let trailer_value = truncate_hash_output(hash_output.trim());
+
+    // Create a commit with the trailer
+    let commit_msg = format!("feat: add feature\n\nVerified: {}\n", trailer_value);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", &commit_msg])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Check should pass
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check"]);
+    assert_eq!(exit_code, 0, "Should exit 0 when trailer matches");
+}
+
+#[test]
+fn test_check_unverified_after_file_change() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run, get hash, commit with trailer
+    run_verify(temp_dir.path(), &["run"]);
+    let (_, hash_output, _) = run_verify(temp_dir.path(), &["hash"]);
+    let trailer_value = truncate_hash_output(hash_output.trim());
+
+    let commit_msg = format!("feat: stuff\n\nVerified: {}\n", trailer_value);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", &commit_msg])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Modify a file — trailer should no longer match
+    fs::write(temp_dir.path().join("test.txt"), "changed").unwrap();
+
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check"]);
+    assert_eq!(exit_code, 1, "Should exit 1 when files changed");
+}
+
+#[test]
+fn test_check_unverified_no_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // No trailer in the commit
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check"]);
+    assert_eq!(exit_code, 1, "Should exit 1 when no trailer");
+}
+
+#[test]
+fn test_check_specific_check_name() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    run_verify(temp_dir.path(), &["run"]);
+    let (_, hash_output, _) = run_verify(temp_dir.path(), &["hash"]);
+    let trailer_value = truncate_hash_output(hash_output.trim());
+
+    let commit_msg = format!("feat: stuff\n\nVerified: {}\n", trailer_value);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", &commit_msg])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Check specific check
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "build"]);
+    assert_eq!(exit_code, 0, "build should be verified");
+
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "lint"]);
+    assert_eq!(exit_code, 0, "lint should be verified");
+}
+
+#[test]
+fn test_trailer_and_check_roundtrip() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+  - name: all
+    depends_on: [build, lint]
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run all checks
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Use trailer command to write to a file (not .txt to avoid matching cache_paths)
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: roundtrip test\n").unwrap();
+
+    let (success, _, _) = run_verify(
+        temp_dir.path(),
+        &["sign", msg_file.to_str().unwrap()],
+    );
+    assert!(success);
+
+    // Commit using that message file
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Non-aggregate checks should verify
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check"]);
+    assert_eq!(exit_code, 0, "All checks should be verified after roundtrip");
+
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "build"]);
+    assert_eq!(exit_code, 0, "build should be verified");
+
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "lint"]);
+    assert_eq!(exit_code, 0, "lint should be verified");
+
+    // Composite check resolves from its deps — all deps verified so composite passes
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "all"]);
+    assert_eq!(exit_code, 0, "Composite should be verified when all deps are");
+
+    // Verify composite is not in the trailer itself
+    let content = fs::read_to_string(&msg_file).unwrap();
+    assert!(!content.contains("all:"), "Composite should not be in trailer: {}", content);
+}
+
+#[test]
+fn test_check_composite_fails_when_dep_stale() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+  - name: all
+    depends_on: [build, lint]
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run, sign, commit
+    run_verify(temp_dir.path(), &["run"]);
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: test\n").unwrap();
+    let (success, _, _) = run_verify(
+        temp_dir.path(),
+        &["sign", msg_file.to_str().unwrap()],
+    );
+    assert!(success);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Everything should pass initially
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "all"]);
+    assert_eq!(exit_code, 0, "Composite should pass when deps match");
+
+    // Change a file — invalidates build and lint
+    fs::write(temp_dir.path().join("test.txt"), "changed").unwrap();
+
+    // Individual checks should fail
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "build"]);
+    assert_eq!(exit_code, 1, "build should fail after file change");
+
+    // Composite should also fail since its deps are stale
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "all"]);
+    assert_eq!(exit_code, 1, "Composite should fail when dep is stale");
+}

@@ -26,7 +26,7 @@ cargo install --path .
 
 The codebase is organized into focused modules in `src/`:
 
-- **main.rs / cli.rs** - Entry point and CLI parsing (subcommands: `init`, `status`, `run`, `clean`)
+- **main.rs / cli.rs** - Entry point and CLI parsing (subcommands: `init`, `status`, `run`, `clean`, `hash`, `sign`, `check`)
 - **config.rs** - YAML configuration parsing and validation (checks for cycles, duplicates, unknown deps)
 - **cache.rs** - Cache state management, stored as JSON in `verify.lock` (committable lock file at project root)
 - **hasher.rs** - BLAKE3 file hashing for change detection
@@ -35,6 +35,7 @@ The codebase is organized into focused modules in `src/`:
 - **ui.rs** - Terminal output with colors and progress indicators
 - **output.rs** - JSON output formatting for tool integration
 - **metadata.rs** - Regex-based metric extraction from command output
+- **trailer.rs** - Commit trailer workflow: computing combined hashes, reading/writing `Verified` trailers via git
 
 ### Key Flows
 
@@ -66,10 +67,12 @@ A check is **unverified** if:
 
 ### Cache Format (verify.lock)
 
-The cache is stored as `verify.lock` in each project/subproject root. Designed to:
+The cache is stored as `verify.lock` in each project/subproject root. In the **lock file workflow**, it is committed to git and designed to:
 - Share verification state between local development and CI
 - Travel with git branches and worktrees
 - Have minimal diffs (no timestamps or durations)
+
+In the **trailer workflow**, `verify.lock` is gitignored and serves as a local-only cache. Verification state is instead stored in git commit trailers (see Trailer Workflow below).
 
 **Structure:**
 ```json
@@ -89,6 +92,20 @@ The cache is stored as `verify.lock` in each project/subproject root. Designed t
 On `verify init`, `.gitattributes` is updated with `verify.lock merge=ours` for merge conflict handling.
 
 **Exit Codes**: 0 (success), 1 (failures), 2 (configuration error)
+
+### Trailer Workflow
+
+As an alternative to committing `verify.lock`, verification proof can be stored in git commit trailers. Each commit gets a `Verified` trailer containing truncated (8-char) BLAKE3 hashes of each check's config + file state:
+
+```
+Verified: build:a1b2c3d4,lint:e5f6a7b8
+```
+
+- `verify hash` computes full 64-char combined hashes for inspection
+- `verify sign FILE` writes a `Verified` trailer to a commit message file (using `git interpret-trailers`)
+- `verify check` reads the trailer from HEAD and compares against current file state (exit 0 if matched, 1 if not)
+
+Aggregate checks are implicit (not included in the trailer) — they are verified iff all their dependencies are verified. Untracked checks (no `cache_paths`) are skipped.
 
 ## Configuration Format (verify.yaml)
 

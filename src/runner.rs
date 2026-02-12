@@ -383,6 +383,128 @@ fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> 
     Ok(false)
 }
 
+/// Validate HEAD commit trailer against current file state.
+/// Returns true if any check is unverified (trailer mismatch or missing).
+pub fn run_check_trailer(
+    project_root: &Path,
+    config: &Config,
+    json: bool,
+    name: Option<String>,
+) -> Result<bool> {
+    let ui = Ui::new(false);
+
+    // Read trailer from HEAD
+    let trailer_hashes = crate::trailer::read_trailer(project_root)?;
+
+    // Compute expected hashes from current files (excludes aggregates)
+    let expected_hashes = crate::trailer::compute_all_expected_hashes(project_root, config)?;
+
+    let graph = DependencyGraph::from_config(config)?;
+    let waves = graph.execution_waves();
+
+    let mut has_unverified = false;
+    let mut status_items: Vec<StatusItemJson> = Vec::new();
+    // Track which checks are verified so composites can resolve from deps
+    let mut verified_checks: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for wave in waves {
+        for check_name in wave {
+            let check = match config.get(&check_name) {
+                Some(v) => v,
+                None => continue, // subproject, skip
+            };
+
+            let is_composite = check.command.is_none();
+
+            let (is_verified, reason): (bool, Option<UnverifiedReason>) = if is_composite {
+                // Composite check: verified iff all dependencies are verified
+                let failed_dep = check
+                    .depends_on
+                    .iter()
+                    .find(|dep| !verified_checks.contains(*dep));
+                match failed_dep {
+                    Some(dep) => (
+                        false,
+                        Some(UnverifiedReason::DependencyUnverified {
+                            dependency: dep.clone(),
+                        }),
+                    ),
+                    None => (true, None),
+                }
+            } else {
+                // Regular check: compare expected hash against trailer
+                let expected = match expected_hashes.get(&check_name) {
+                    Some(h) => h,
+                    None => {
+                        // Untracked check (no cache_paths), skip
+                        continue;
+                    }
+                };
+
+                let truncated_expected = crate::trailer::truncate_hash(expected);
+
+                let trailer_value = trailer_hashes
+                    .as_ref()
+                    .and_then(|m| m.get(&check_name))
+                    .map(|s| s.as_str());
+
+                let matched = trailer_value == Some(truncated_expected);
+                let reason = if !matched {
+                    if trailer_value.is_none() {
+                        Some(UnverifiedReason::NeverRun)
+                    } else {
+                        Some(UnverifiedReason::FilesChanged {
+                            changed_files: vec![],
+                        })
+                    }
+                } else {
+                    None
+                };
+                (matched, reason)
+            };
+
+            if is_verified {
+                verified_checks.insert(check_name.clone());
+            }
+
+            // Skip if filtering and not the requested check
+            if let Some(ref filter) = name {
+                if filter != &check_name {
+                    continue;
+                }
+            }
+
+            if !is_verified {
+                has_unverified = true;
+            }
+
+            let status = if is_verified {
+                VerificationStatus::Verified
+            } else {
+                VerificationStatus::Unverified {
+                    reason: reason.unwrap_or(UnverifiedReason::NeverRun),
+                }
+            };
+
+            if json {
+                let json_item = CheckStatusJson::from_status(&check_name, &status, None);
+                status_items.push(StatusItemJson::Check(json_item));
+            } else {
+                ui.print_status(&check_name, &status, &BTreeMap::new(), 0);
+            }
+        }
+    }
+
+    if json {
+        let output = StatusOutput {
+            checks: status_items,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
+    Ok(has_unverified)
+}
+
 /// Run verification checks
 pub fn run_checks(
     project_root: &Path,
