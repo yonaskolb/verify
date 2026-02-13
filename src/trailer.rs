@@ -138,6 +138,37 @@ pub fn read_trailer(project_root: &Path) -> Result<Option<BTreeMap<String, Strin
     Ok(Some(parse_trailer_value(&value)))
 }
 
+/// Search recent git history for the most recent commit with a Verified trailer.
+/// Returns None if no trailer is found within max_depth commits.
+pub fn read_trailer_from_history(
+    project_root: &Path,
+    max_depth: usize,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let depth_arg = format!("-{}", max_depth);
+    let output = Command::new("git")
+        .args(["log", &depth_arg, "--format=%(trailers:key=Verified,valueonly)"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to run git log. Is this a git repository?")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(parse_trailer_value(trimmed)));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Parse a trailer value string "name:hash,name:hash,..." into a map.
 pub fn parse_trailer_value(value: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();

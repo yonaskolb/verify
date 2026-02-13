@@ -178,5 +178,16 @@ fn run() -> Result<i32> {
                 Ok(0)
             }
         }
+
+        Commands::Sync {} => {
+            let config = config::Config::load(config_path)?;
+            let mut cache = cache::CacheState::load(&project_root)?;
+            let synced = runner::run_sync(&project_root, &config, &mut cache, cli.json)?;
+            if synced {
+                Ok(0)
+            } else {
+                Ok(1)
+            }
+        }
     }
 }

@@ -505,6 +505,118 @@ pub fn run_check_trailer(
     Ok(has_unverified)
 }
 
+/// Sync cache from git commit trailer history.
+/// Searches recent commits for a Verified trailer and seeds the lock file
+/// for checks whose current file state matches the trailer hashes.
+/// Returns true if any checks were synced.
+pub fn run_sync(
+    project_root: &Path,
+    config: &Config,
+    cache: &mut CacheState,
+    json: bool,
+) -> Result<bool> {
+    let ui = Ui::new(false);
+
+    // Search recent history for a trailer
+    let trailer_hashes = crate::trailer::read_trailer_from_history(project_root, 50)?;
+
+    let trailer_hashes = match trailer_hashes {
+        Some(h) => h,
+        None => {
+            if !json {
+                eprintln!("No Verified trailer found in recent history");
+            }
+            return Ok(false);
+        }
+    };
+
+    let graph = DependencyGraph::from_config(config)?;
+    let waves = graph.execution_waves();
+
+    let mut synced_count = 0u32;
+    let mut verified_checks: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut status_items: Vec<StatusItemJson> = Vec::new();
+
+    for wave in waves {
+        for check_name in wave {
+            let check = match config.get(&check_name) {
+                Some(v) => v,
+                None => continue, // subproject, skip
+            };
+
+            // Aggregate checks: verified iff all dependencies are verified
+            if check.command.is_none() {
+                let all_deps_verified = check
+                    .depends_on
+                    .iter()
+                    .all(|dep| verified_checks.contains(dep));
+                if all_deps_verified {
+                    verified_checks.insert(check_name.clone());
+                }
+                continue;
+            }
+
+            // Skip untracked checks (no cache_paths)
+            if check.cache_paths.is_empty() {
+                continue;
+            }
+
+            // Compute current hashes from files on disk
+            let config_hash = check.config_hash();
+            let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
+            let combined = crate::trailer::compute_combined_hash(&config_hash, &hash_result.combined_hash);
+            let truncated = crate::trailer::truncate_hash(&combined);
+
+            let trailer_value = trailer_hashes.get(&check_name).map(|s| s.as_str());
+
+            if trailer_value == Some(truncated) {
+                // Trailer matches — seed the cache entry
+                let file_hashes = if check.per_file {
+                    hash_result.file_hashes.clone()
+                } else {
+                    BTreeMap::new()
+                };
+
+                cache.update(
+                    &check_name,
+                    true,
+                    config_hash,
+                    Some(hash_result.combined_hash.clone()),
+                    file_hashes,
+                    BTreeMap::new(), // metadata can't be recovered
+                    check.per_file,
+                );
+
+                verified_checks.insert(check_name.clone());
+                synced_count += 1;
+
+                if json {
+                    let status = VerificationStatus::Verified;
+                    let json_item = CheckStatusJson::from_status(&check_name, &status, None);
+                    status_items.push(StatusItemJson::Check(json_item));
+                } else {
+                    ui.print_status(&check_name, &VerificationStatus::Verified, &BTreeMap::new(), 0);
+                }
+            }
+        }
+    }
+
+    if synced_count > 0 {
+        cache.save(project_root)?;
+    }
+
+    if json {
+        let output = StatusOutput {
+            checks: status_items,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if synced_count == 0 {
+        eprintln!("No checks matched the trailer");
+    }
+
+    Ok(synced_count > 0)
+}
+
 /// Run verification checks
 pub fn run_checks(
     project_root: &Path,
