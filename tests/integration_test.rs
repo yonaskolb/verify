@@ -1392,3 +1392,207 @@ verifications:
     let exit_code = run_verify_exit_code(temp_dir.path(), &["check", "all"]);
     assert_eq!(exit_code, 1, "Composite should fail when dep is stale");
 }
+
+#[test]
+fn test_sync_seeds_cache_from_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run checks to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Sign and commit with trailer
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: add feature\n").unwrap();
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Delete the lock file (simulates fresh worktree)
+    fs::remove_file(temp_dir.path().join("verify.lock")).unwrap();
+
+    // Sync should seed the cache from the trailer
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
+    assert_eq!(exit_code, 0, "Sync should succeed when trailer matches");
+
+    // Lock file should now exist
+    assert!(temp_dir.path().join("verify.lock").exists(), "verify.lock should be created");
+
+    // Status should show checks as verified
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["status", "--json"]);
+    assert!(success);
+    assert!(stdout.contains("\"verified\""), "Checks should be verified after sync: {}", stdout);
+}
+
+#[test]
+fn test_sync_no_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // No trailer in history — sync should fail
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
+    assert_eq!(exit_code, 1, "Sync should exit 1 when no trailer found");
+}
+
+#[test]
+fn test_sync_finds_trailer_in_history() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run, sign, and commit with trailer
+    run_verify(temp_dir.path(), &["run"]);
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: with trailer\n").unwrap();
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Make another commit WITHOUT a trailer (simulates a merge commit)
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", "chore: merge"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Delete the lock file
+    fs::remove_file(temp_dir.path().join("verify.lock")).unwrap();
+
+    // Sync should still find the trailer from the previous commit
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
+    assert_eq!(exit_code, 0, "Sync should find trailer in history");
+
+    // Verify the cache is seeded
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["status", "--json"]);
+    assert!(success);
+    assert!(stdout.contains("\"verified\""), "Check should be verified after sync from history");
+}
+
+#[test]
+fn test_sync_partial_match() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "src/*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "docs/*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+    fs::create_dir_all(temp_dir.path().join("docs")).unwrap();
+    fs::write(temp_dir.path().join("src/main.txt"), "code").unwrap();
+    fs::write(temp_dir.path().join("docs/readme.txt"), "docs").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run, sign, commit
+    run_verify(temp_dir.path(), &["run"]);
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: stuff\n").unwrap();
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Change only docs files — build should still match, lint should not
+    fs::write(temp_dir.path().join("docs/readme.txt"), "changed docs").unwrap();
+
+    // Delete lock file
+    fs::remove_file(temp_dir.path().join("verify.lock")).unwrap();
+
+    // Sync should partially succeed
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
+    assert_eq!(exit_code, 0, "Sync should succeed with partial match");
+
+    // Build should be verified, lint should not be in the synced cache
+    let (_, stdout, _) = run_verify(temp_dir.path(), &["status", "--json"]);
+    // Parse the JSON to check individual statuses
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let checks = json["checks"].as_array().unwrap();
+
+    let build_status = checks.iter().find(|c| c["name"] == "build").unwrap();
+    assert_eq!(build_status["status"], "verified", "build should be verified");
+
+    let lint_status = checks.iter().find(|c| c["name"] == "lint").unwrap();
+    assert_ne!(lint_status["status"], "verified", "lint should NOT be verified (files changed)");
+}
+
+#[test]
+fn test_sync_then_run_skips_verified() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run, sign, commit
+    run_verify(temp_dir.path(), &["run"]);
+    let msg_file = temp_dir.path().join("COMMIT_MSG");
+    fs::write(&msg_file, "feat: stuff\n").unwrap();
+    run_verify(temp_dir.path(), &["sign", msg_file.to_str().unwrap()]);
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-F", msg_file.to_str().unwrap()])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    // Delete lock file
+    fs::remove_file(temp_dir.path().join("verify.lock")).unwrap();
+
+    // Sync
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
+    assert_eq!(exit_code, 0);
+
+    // Run should skip the synced check (shows as cached/verified)
+    let (success, stdout, _) = run_verify(temp_dir.path(), &["run"]);
+    assert!(success, "Run should succeed");
+    assert!(stdout.contains("verified"), "Run should show build as verified/cached: {}", stdout);
+}

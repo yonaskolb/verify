@@ -90,6 +90,9 @@ pub enum Commands {
         #[arg(value_name = "NAME")]
         name: Option<String>,
     },
+
+    /// Sync cache from git commit trailer history
+    Sync {},
 }
 
 impl Default for Commands {

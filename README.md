@@ -247,6 +247,7 @@ verify hash build        # Print hash for a specific check
 verify sign FILE         # Embed verification proof in a commit message file
 verify check             # Validate the current commit's proof against current files
 verify check build       # Validate a specific check
+verify sync              # Seed local cache from a Verified trailer in recent git history
 ```
 
 ### JSON Output
@@ -318,6 +319,16 @@ In CI, validate that the commit's checks match the current file state:
 verify check             # exits 0 if proof matches, 1 if not
 verify check tests       # validate a specific check
 ```
+
+### Syncing Cache in New Worktrees
+
+In a fresh worktree or checkout, `verify sync` bootstraps the local cache from git history:
+
+```bash
+verify sync
+```
+
+This searches recent commits for a `Verified` trailer, compares the hashes against the current file state, and seeds `verify.lock` with any matching checks. Subsequent `verify run` calls will skip those checks.
 
 ## Exit Codes
 
