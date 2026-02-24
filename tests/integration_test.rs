@@ -1454,9 +1454,9 @@ verifications:
 
     init_git_repo(temp_dir.path());
 
-    // No trailer in history — sync should fail
+    // No trailer in history — sync is a no-op but still succeeds
     let exit_code = run_verify_exit_code(temp_dir.path(), &["sync"]);
-    assert_eq!(exit_code, 1, "Sync should exit 1 when no trailer found");
+    assert_eq!(exit_code, 0, "Sync should exit 0 even when no trailer found");
 }
 
 #[test]
