@@ -26,7 +26,7 @@ cargo install --path .
 
 The codebase is organized into focused modules in `src/`:
 
-- **main.rs / cli.rs** - Entry point and CLI parsing (subcommands: `init`, `status`, `run`, `clean`, `hash`, `sign`, `check`, `sync`)
+- **main.rs / cli.rs** - Entry point and CLI parsing (subcommands: `init`, `status`, `run`, `clean`, `hash`, `sign`, `check`, `sync`, `resign`)
 - **config.rs** - YAML configuration parsing and validation (checks for cycles, duplicates, unknown deps)
 - **cache.rs** - Cache state management, stored as JSON in `verify.lock` (committable lock file at project root)
 - **hasher.rs** - BLAKE3 file hashing for change detection
@@ -105,6 +105,7 @@ Verified: build:a1b2c3d4,lint:e5f6a7b8
 - `verify sign FILE` writes a `Verified` trailer to a commit message file (using `git interpret-trailers`)
 - `verify check` reads the trailer from HEAD and compares against current file state (exit 0 if matched, 1 if not)
 - `verify sync` seeds the local cache (`verify.lock`) from a `Verified` trailer found in recent git history (searches last 50 commits). Useful for bootstrapping cache state in fresh worktrees or checkouts.
+- `verify resign` re-signs the current HEAD commit with a fresh `Verified` trailer by amending the commit. Useful when files or cache state changed after the original commit (e.g. after rebasing, merging in another branch, or running `verify run` post-commit). Uses `--no-verify` and sets `VERIFY_RESIGNING=1` env var to prevent hook recursion.
 
 Aggregate checks are implicit (not included in the trailer) — they are verified iff all their dependencies are verified. Untracked checks (no `cache_paths`) are skipped.
 

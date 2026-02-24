@@ -248,6 +248,7 @@ verify sign FILE         # Embed verification proof in a commit message file
 verify check             # Validate the current commit's proof against current files
 verify check build       # Validate a specific check
 verify sync              # Seed local cache from a Verified trailer in recent git history
+verify resign            # Re-sign HEAD commit with fresh verification trailer
 ```
 
 ### JSON Output
@@ -319,6 +320,16 @@ In CI, validate that the commit's checks match the current file state:
 verify check             # exits 0 if proof matches, 1 if not
 verify check tests       # validate a specific check
 ```
+
+### Re-signing a Commit
+
+If you need to update the verification trailer on an existing commit (e.g. after rebasing, merging in another branch, or running `verify run` post-commit), use `resign` to amend HEAD with a fresh trailer:
+
+```bash
+verify resign
+```
+
+This computes current hashes from the cache, replaces any existing `Verified` trailer, and amends HEAD. It sets `VERIFY_RESIGNING=1` in the environment so hooks can detect and skip the amend.
 
 ### Syncing Cache in New Worktrees
 

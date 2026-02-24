@@ -1596,3 +1596,178 @@ verifications:
     assert!(success, "Run should succeed");
     assert!(stdout.contains("verified"), "Run should show build as verified/cached: {}", stdout);
 }
+
+// ==================== Resign Command Tests ====================
+
+#[test]
+fn test_resign_amends_head_with_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run verify to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Resign should amend HEAD with trailer
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "resign should succeed: {}", stderr);
+    assert!(stderr.contains("Resigned HEAD with:"), "Should print trailer: {}", stderr);
+    assert!(stderr.contains("build:"), "Should include build hash: {}", stderr);
+
+    // Verify HEAD now has the trailer
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stdout);
+    assert!(message.contains("Verified:"), "HEAD should have Verified trailer: {}", message);
+    assert!(message.contains("build:"), "Trailer should include build: {}", message);
+}
+
+#[test]
+fn test_resign_no_op_when_cache_empty() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Don't run verify — cache is empty, so nothing is fresh
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "resign should exit 0 even with no fresh checks: {}", stderr);
+    assert!(stderr.contains("No verified checks"), "Should say no verified checks: {}", stderr);
+}
+
+#[test]
+fn test_resign_replaces_existing_trailer() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Resign twice — should replace, not duplicate
+    run_verify(temp_dir.path(), &["resign"]);
+    run_verify(temp_dir.path(), &["resign"]);
+
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stdout);
+    let count = message.matches("Verified:").count();
+    assert_eq!(count, 1, "Should have exactly one Verified trailer, got {}: {}", count, message);
+}
+
+#[test]
+fn test_resign_then_check_passes() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+    run_verify(temp_dir.path(), &["run"]);
+    run_verify(temp_dir.path(), &["resign"]);
+
+    // verify check should pass against the resigned trailer
+    let exit_code = run_verify_exit_code(temp_dir.path(), &["check"]);
+    assert_eq!(exit_code, 0, "check should pass after resign");
+}
+
+#[test]
+fn test_resign_partial_cache_signs_only_fresh() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+  - name: lint
+    command: echo "lint"
+    cache_paths:
+      - "*.rs"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+    fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run only build, not lint
+    run_verify(temp_dir.path(), &["run", "build"]);
+
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "resign should succeed: {}", stderr);
+    assert!(stderr.contains("build:"), "Should include build: {}", stderr);
+    // lint was never run, so it shouldn't be in the trailer
+    assert!(!stderr.contains("lint:"), "Should not include lint: {}", stderr);
+}
+
+#[test]
+fn test_resign_preserves_commit_message() {
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Create a commit with a multi-line message
+    let original_msg = "feat: important feature\n\nThis has a detailed body explaining\nthe change across multiple lines.\n\nAnd even multiple paragraphs.";
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", original_msg])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+
+    run_verify(temp_dir.path(), &["run"]);
+    run_verify(temp_dir.path(), &["resign"]);
+
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stdout);
+
+    // Original message content must be preserved
+    assert!(message.contains("feat: important feature"), "Subject line lost: {}", message);
+    assert!(message.contains("This has a detailed body explaining"), "Body lost: {}", message);
+    assert!(message.contains("multiple paragraphs"), "Paragraphs lost: {}", message);
+    // And trailer should be there too
+    assert!(message.contains("Verified:"), "Trailer missing: {}", message);
+}

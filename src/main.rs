@@ -179,6 +179,22 @@ fn run() -> Result<i32> {
             }
         }
 
+        Commands::Resign {} => {
+            let config = config::Config::load(config_path)?;
+            let cache = cache::CacheState::load(&project_root)?;
+            let hashes = trailer::compute_all_hashes(&project_root, &config, &cache)?;
+            if hashes.is_empty() {
+                eprintln!("No verified checks to sign");
+                return Ok(0);
+            }
+            let trailer_value = trailer::format_trailer_value(&hashes);
+            trailer::resign_head(&project_root, &hashes)?;
+            if !cli.json {
+                eprintln!("Resigned HEAD with: {}", trailer_value);
+            }
+            Ok(0)
+        }
+
         Commands::Sync {} => {
             let config = config::Config::load(config_path)?;
             let mut cache = cache::CacheState::load(&project_root)?;

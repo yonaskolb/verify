@@ -223,6 +223,58 @@ pub fn write_trailer(commit_msg_file: &Path, hashes: &BTreeMap<String, String>) 
     Ok(())
 }
 
+/// Amend HEAD's commit message with a fresh Verified trailer.
+/// Reads the current commit message, writes it to a temp file,
+/// applies the trailer via write_trailer(), then amends the commit.
+/// Sets VERIFY_RESIGNING=1 on the amend to prevent hook recursion.
+pub fn resign_head(project_root: &Path, hashes: &BTreeMap<String, String>) -> Result<()> {
+    // Read HEAD's commit message
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to read HEAD commit message")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let message = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // Write to a temp file
+    let temp_path = std::env::temp_dir().join("verify-resign-msg");
+    std::fs::write(&temp_path, &message)
+        .context("Failed to write temp commit message file")?;
+
+    // Write the trailer (replaces existing Verified: trailer via --if-exists replace)
+    write_trailer(&temp_path, hashes)?;
+
+    // Amend HEAD with the updated message
+    let amend = Command::new("git")
+        .args(["commit", "--amend", "-F"])
+        .arg(&temp_path)
+        .args(["--no-verify", "--allow-empty"])
+        .env("VERIFY_RESIGNING", "1")
+        .current_dir(project_root)
+        .output()
+        .context("Failed to amend HEAD commit")?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_path);
+
+    if !amend.status.success() {
+        anyhow::bail!(
+            "git commit --amend failed: {}",
+            String::from_utf8_lossy(&amend.stderr)
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
