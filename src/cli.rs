@@ -17,10 +17,6 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Stage verify.lock after successful run (for git hooks)
-    #[arg(long, global = true)]
-    pub stage: bool,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }

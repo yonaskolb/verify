@@ -107,8 +107,8 @@ fn run() -> Result<i32> {
                 cli.verbose,
             )?;
 
-            // Stage verify.lock if requested (from either cli.stage or run --stage) and checks passed
-            if (cli.stage || stage) && result == 0 {
+            // Stage verify.lock if requested and checks passed
+            if stage && result == 0 {
                 let lock_path = project_root.join("verify.lock");
                 if lock_path.exists() {
                     std::process::Command::new("git")
