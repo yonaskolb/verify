@@ -244,8 +244,9 @@ pub fn resign_head(project_root: &Path, hashes: &BTreeMap<String, String>) -> Re
 
     let message = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // Write to a temp file
-    let temp_path = std::env::temp_dir().join("verify-resign-msg");
+    // Write to a temp file inside .git/ to avoid races when multiple
+    // instances (or parallel tests) run resign concurrently.
+    let temp_path = project_root.join(".git/verify-resign-msg");
     std::fs::write(&temp_path, &message)
         .context("Failed to write temp commit message file")?;
 
