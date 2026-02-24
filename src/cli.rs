@@ -93,6 +93,9 @@ pub enum Commands {
 
     /// Sync cache from git commit trailer history
     Sync {},
+
+    /// Re-sign HEAD commit with fresh verification trailer
+    Resign {},
 }
 
 impl Default for Commands {
