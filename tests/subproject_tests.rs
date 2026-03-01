@@ -607,6 +607,94 @@ fn test_status_subproject_stale_after_file_change_propagates() {
     );
 }
 
+// ==================== Nested Subproject Staleness Propagation Tests ====================
+
+#[test]
+fn test_nested_subproject_verified_status_propagates_to_parent() {
+    // Bug: check_has_stale doesn't pre-populate subproject staleness into is_stale,
+    // so a verification depending on a sub-subproject is always treated as stale.
+    // This causes the entire subproject to appear stale to the parent, even when
+    // all checks have been run and are verified.
+    //
+    // Structure:
+    //   root: subproject "frontend" + verification "deploy" depends_on: [frontend]
+    //   packages/frontend: subproject "components" + verification "build" depends_on: [components]
+    //   packages/frontend/components: verification "compile"
+    //
+    // After running everything, "build" in the frontend config depends on "components"
+    // (a subproject). check_has_stale is called on the frontend config but doesn't
+    // insert "components" staleness into is_stale, so "build" is always treated as
+    // stale, making "frontend" appear stale, making "deploy" unverified.
+    let project = TestProject::new(
+        r#"verifications:
+  - name: frontend
+    path: packages/frontend
+  - name: deploy
+    command: echo "deploying"
+    depends_on: [frontend]
+    cache_paths:
+      - "*.txt"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/frontend",
+        r#"verifications:
+  - name: components
+    path: components
+  - name: build
+    command: echo "building frontend"
+    depends_on: [components]
+    cache_paths:
+      - "*.ts"
+"#,
+    );
+
+    project.add_subproject(
+        "packages/frontend/components",
+        r#"verifications:
+  - name: compile
+    command: echo "compiling components"
+    cache_paths:
+      - "*.ts"
+"#,
+    );
+
+    project.create_file("root.txt", "root content");
+    project.create_subproject_file("packages/frontend", "app.ts", "export default {}");
+    project.create_subproject_file("packages/frontend/components", "button.ts", "export {}");
+
+    // Run everything - should succeed
+    let (success, stdout, stderr) = project.run(&["run"]);
+    assert!(
+        success,
+        "Run should succeed. Stdout: {}\nStderr: {}",
+        stdout, stderr
+    );
+
+    // Now check status — everything was just run, so all should be verified
+    let (_, stdout, _) = project.run(&["status"]);
+
+    // The deploy verification should be verified (not "depends on: frontend")
+    assert!(
+        !stdout.contains("depends on"),
+        "No verification should show 'depends on' as unverified reason after a clean run.\nFull output:\n{}",
+        stdout
+    );
+
+    // Specifically, deploy should be verified
+    let deploy_line = stdout
+        .lines()
+        .find(|l| l.contains("deploy"))
+        .unwrap_or("");
+    assert!(
+        deploy_line.contains("verified") && !deploy_line.contains("unverified"),
+        "deploy should be verified after running everything: '{}'\nFull output:\n{}",
+        deploy_line,
+        stdout
+    );
+}
+
 // ==================== Subproject Error Handling Tests ====================
 
 #[test]
