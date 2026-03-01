@@ -685,6 +685,7 @@ fn run_checks_recursive(
 
     // Track which items have been executed and their staleness
     let mut executed: HashMap<String, bool> = HashMap::new(); // name -> had_failures
+    let mut was_stale: HashMap<String, bool> = HashMap::new(); // name -> was stale (actually ran)
 
     // Process items in config order, but handle dependencies first
     for item in &config.verifications {
@@ -699,6 +700,7 @@ fn run_checks_recursive(
             ui,
             indent,
             &mut executed,
+            &mut was_stale,
             &mut final_results,
         )?;
     }
@@ -719,6 +721,7 @@ fn execute_item_with_deps(
     ui: &Ui,
     indent: usize,
     executed: &mut HashMap<String, bool>,
+    was_stale: &mut HashMap<String, bool>,
     results: &mut RunResults,
 ) -> Result<()> {
     let item_name = item.name().to_string();
@@ -737,7 +740,8 @@ fn execute_item_with_deps(
     if let VerificationItem::Verification(v) = item {
         for dep_name in &v.depends_on {
             resolve_and_execute_dep(
-                project_root, config, cache, dep_name, force, json, ui, indent, executed, results,
+                project_root, config, cache, dep_name, force, json, ui, indent, executed,
+                was_stale, results,
             )?;
         }
     }
@@ -758,6 +762,7 @@ fn execute_item_with_deps(
                 ui,
                 indent,
                 executed,
+                was_stale,
                 results,
             )?;
         }
@@ -770,7 +775,9 @@ fn execute_item_with_deps(
                 let sub_results =
                     run_checks_subproject(project_root, s, names, force, json, ui, indent)?;
                 let had_failures = sub_results.failed > 0;
+                let had_stale = sub_results.passed > 0 || sub_results.failed > 0;
                 executed.insert(s.name.clone(), had_failures);
+                was_stale.insert(s.name.clone(), had_stale);
                 results.add_subproject(&s.name, s.path.to_string_lossy().as_ref(), sub_results);
             }
         }
@@ -793,6 +800,7 @@ fn resolve_and_execute_dep(
     ui: &Ui,
     indent: usize,
     executed: &mut HashMap<String, bool>,
+    was_stale: &mut HashMap<String, bool>,
     results: &mut RunResults,
 ) -> Result<()> {
     if executed.contains_key(dep_name) {
@@ -803,7 +811,9 @@ fn resolve_and_execute_dep(
         let sub_results =
             run_checks_subproject(project_root, sub, &[], force, json, ui, indent)?;
         let had_failures = sub_results.failed > 0;
+        let had_stale = sub_results.passed > 0 || sub_results.failed > 0;
         executed.insert(dep_name.to_string(), had_failures);
+        was_stale.insert(dep_name.to_string(), had_stale);
         results.add_subproject(dep_name, sub.path.to_string_lossy().as_ref(), sub_results);
     } else if let Some(dep_v) = config.get(dep_name) {
         // Recursively resolve this dep's own dependencies first
@@ -818,11 +828,12 @@ fn resolve_and_execute_dep(
                 ui,
                 indent,
                 executed,
+                was_stale,
                 results,
             )?;
         }
         execute_verification(
-            project_root, dep_v, cache, force, json, ui, indent, executed, results,
+            project_root, dep_v, cache, force, json, ui, indent, executed, was_stale, results,
         )?;
     }
 
@@ -840,6 +851,7 @@ fn execute_verification(
     ui: &Ui,
     indent: usize,
     executed: &mut HashMap<String, bool>,
+    was_stale: &mut HashMap<String, bool>,
     results: &mut RunResults,
 ) -> Result<()> {
     // Skip if already executed
@@ -856,9 +868,11 @@ fn execute_verification(
     // Compute staleness
     let hash_result = compute_check_hash(project_root, &check.cache_paths)?;
 
-    // Build staleness map from executed checks
+    // Build staleness map: a dependency is stale if it actually ran (was_stale),
+    // not just if it failed. This ensures dependent checks re-run when their
+    // dependencies were stale, even if the dependency succeeded.
     let dep_staleness: HashMap<String, bool> =
-        executed.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        was_stale.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
     let status = if dep_failed {
         VerificationStatus::Unverified {
@@ -898,13 +912,19 @@ fn execute_verification(
             }
             results.add_fail(&check.name, 0, None, None, &BTreeMap::new(), None);
             executed.insert(check.name.clone(), true);
+            was_stale.insert(check.name.clone(), true);
         } else {
+            let any_dep_stale = check
+                .depends_on
+                .iter()
+                .any(|d| was_stale.get(d).copied().unwrap_or(false));
             if !json {
                 let pb = create_running_indicator(&check.name, indent);
                 finish_cached(&pb, &check.name, &BTreeMap::new(), indent);
             }
             results.add_skipped(&check.name);
             executed.insert(check.name.clone(), false);
+            was_stale.insert(check.name.clone(), any_dep_stale);
         }
         return Ok(());
     }
@@ -926,6 +946,7 @@ fn execute_verification(
         }
         results.add_skipped(&check.name);
         executed.insert(check.name.clone(), false);
+        was_stale.insert(check.name.clone(), false);
         return Ok(());
     }
 
@@ -945,6 +966,7 @@ fn execute_verification(
             ui,
             indent,
             executed,
+            was_stale,
             results,
             prev_metadata,
         );
@@ -995,6 +1017,7 @@ fn execute_verification(
 
     // Record result
     executed.insert(check.name.clone(), !success);
+    was_stale.insert(check.name.clone(), true);
 
     if success {
         if let Some(pb) = pb {
@@ -1065,6 +1088,7 @@ fn execute_per_file(
     ui: &Ui,
     indent: usize,
     executed: &mut HashMap<String, bool>,
+    was_stale: &mut HashMap<String, bool>,
     results: &mut RunResults,
     prev_metadata: Option<BTreeMap<String, MetadataValue>>,
 ) -> Result<()> {
@@ -1096,6 +1120,7 @@ fn execute_per_file(
         }
         results.add_skipped(&check.name);
         executed.insert(check.name.clone(), false);
+        was_stale.insert(check.name.clone(), false);
         return Ok(());
     }
 
@@ -1191,6 +1216,7 @@ fn execute_per_file(
         let total_duration_ms = start.elapsed().as_millis() as u64;
         cache.mark_per_file_failed(&check.name, &config_hash);
         executed.insert(check.name.clone(), true);
+        was_stale.insert(check.name.clone(), true);
 
         // Combine all failure outputs
         let combined_output = failed_files
@@ -1233,6 +1259,7 @@ fn execute_per_file(
     );
 
     executed.insert(check.name.clone(), false);
+    was_stale.insert(check.name.clone(), true);
     results.add_pass(
         &check.name,
         total_duration_ms,
@@ -2056,5 +2083,82 @@ mod tests {
 
         assert!(success);
         assert!(output.contains("test content"));
+    }
+
+    // ==================== dependency re-run tests ====================
+
+    #[test]
+    fn test_dependency_rerun_triggers_dependent_rerun() {
+        // When a dependency re-runs (was stale) and succeeds, the dependent check
+        // should also re-run, even if its own files haven't changed.
+        //
+        // This tests the scenario: build depends on lib files, app depends on build.
+        // When lib files change, build re-runs. App should also re-run because
+        // its dependency (build) was stale, even though app's own files are unchanged.
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path();
+
+        // Create source files for each check
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(root.join("lib/code.rs"), "fn lib_v1() {}").unwrap();
+        std::fs::write(root.join("app/code.rs"), "fn app_v1() {}").unwrap();
+
+        // Create config: build (watches lib/) -> app (watches app/, depends on build)
+        let config = Config {
+            verifications: vec![
+                VerificationItem::Verification(Verification {
+                    name: "build".to_string(),
+                    command: Some("echo build-ok".to_string()),
+                    cache_paths: vec!["lib/**/*".to_string()],
+                    depends_on: vec![],
+                    timeout_secs: None,
+                    metadata: HashMap::new(),
+                    per_file: false,
+                }),
+                VerificationItem::Verification(Verification {
+                    name: "app".to_string(),
+                    command: Some("echo app-ok".to_string()),
+                    cache_paths: vec!["app/**/*".to_string()],
+                    depends_on: vec!["build".to_string()],
+                    timeout_secs: None,
+                    metadata: HashMap::new(),
+                    per_file: false,
+                }),
+            ],
+        };
+
+        let ui = Ui::new(false);
+        let mut cache = CacheState::new();
+
+        // First run: both checks should execute
+        let results =
+            run_checks_recursive(root, &config, &mut cache, &[], false, true, &ui, 0).unwrap();
+        assert_eq!(results.passed, 2, "First run: both checks should pass");
+        assert_eq!(results.skipped, 0, "First run: nothing should be skipped");
+
+        // Second run with no changes: both should be cached
+        let results =
+            run_checks_recursive(root, &config, &mut cache, &[], false, true, &ui, 0).unwrap();
+        assert_eq!(results.skipped, 2, "Second run: both should be cached");
+        assert_eq!(results.passed, 0, "Second run: nothing should re-run");
+
+        // Now change only lib/code.rs (build's files)
+        std::fs::write(root.join("lib/code.rs"), "fn lib_v2() {}").unwrap();
+
+        // Third run: build should re-run (files changed),
+        // AND app should also re-run (dependency was stale)
+        let results =
+            run_checks_recursive(root, &config, &mut cache, &[], false, true, &ui, 0).unwrap();
+
+        assert_eq!(
+            results.passed, 2,
+            "Third run: both build AND app should re-run (app's dependency was stale)"
+        );
+        assert_eq!(
+            results.skipped, 0,
+            "Third run: app should NOT be cached when its dependency re-ran"
+        );
     }
 }
