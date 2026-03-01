@@ -914,13 +914,17 @@ fn execute_verification(
             executed.insert(check.name.clone(), true);
             was_stale.insert(check.name.clone(), true);
         } else {
+            let any_dep_stale = check
+                .depends_on
+                .iter()
+                .any(|d| was_stale.get(d).copied().unwrap_or(false));
             if !json {
                 let pb = create_running_indicator(&check.name, indent);
                 finish_cached(&pb, &check.name, &BTreeMap::new(), indent);
             }
             results.add_skipped(&check.name);
             executed.insert(check.name.clone(), false);
-            was_stale.insert(check.name.clone(), false);
+            was_stale.insert(check.name.clone(), any_dep_stale);
         }
         return Ok(());
     }
