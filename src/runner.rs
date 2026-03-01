@@ -353,6 +353,19 @@ fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> 
     let graph = DependencyGraph::from_config(config)?;
     let mut is_stale: HashMap<String, bool> = HashMap::new();
 
+    // Pre-compute subproject staleness so verifications that depend on them
+    // can correctly determine their own status
+    for subproject in config.subprojects() {
+        let subproject_dir = project_root.join(&subproject.path);
+        let sub_config_path = subproject_dir.join("verify.yaml");
+        if sub_config_path.exists() {
+            let sub_config = Config::load_with_base(&sub_config_path, &subproject_dir)?;
+            let sub_cache = CacheState::load(&subproject_dir)?;
+            let has_stale = check_has_stale(&subproject_dir, &sub_config, &sub_cache)?;
+            is_stale.insert(subproject.name.clone(), has_stale);
+        }
+    }
+
     for wave in graph.execution_waves() {
         for name in wave {
             if let Some(check) = config.get(&name) {
@@ -367,16 +380,10 @@ fn check_has_stale(project_root: &Path, config: &Config, cache: &CacheState) -> 
         }
     }
 
-    // Also check subprojects
+    // Check if any subprojects are stale (already computed above)
     for subproject in config.subprojects() {
-        let subproject_dir = project_root.join(&subproject.path);
-        let sub_config_path = subproject_dir.join("verify.yaml");
-        if sub_config_path.exists() {
-            let sub_config = Config::load_with_base(&sub_config_path, &subproject_dir)?;
-            let sub_cache = CacheState::load(&subproject_dir)?;
-            if check_has_stale(&subproject_dir, &sub_config, &sub_cache)? {
-                return Ok(true);
-            }
+        if is_stale.get(&subproject.name).copied().unwrap_or(true) {
+            return Ok(true);
         }
     }
 
