@@ -1828,3 +1828,56 @@ verifications:
     // Clean up
     let _ = fs::remove_file(&merge_head_path);
 }
+
+#[test]
+fn test_resign_skips_when_trailer_already_matches() {
+    // Simulates the fast-forward merge scenario: HEAD already has a valid
+    // Verified trailer that matches the current file state, so resign
+    // should be a no-op (avoids rewriting shared history).
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run verify and resign to get a commit with a valid trailer
+    run_verify(temp_dir.path(), &["run"]);
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "first resign should succeed: {}", stderr);
+    assert!(stderr.contains("Resigned HEAD with:"), "Should resign: {}", stderr);
+
+    // Record the commit hash after first resign
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let hash_after_first = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Second resign should skip — trailer already matches
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "second resign should succeed: {}", stderr);
+    assert!(
+        stderr.contains("already has matching trailer"),
+        "Should skip resign: {}",
+        stderr,
+    );
+
+    // Commit hash should be unchanged (no amend happened)
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let hash_after_second = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(
+        hash_after_first, hash_after_second,
+        "HEAD should not have been amended",
+    );
+}

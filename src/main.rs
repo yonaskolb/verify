@@ -187,6 +187,22 @@ fn run() -> Result<i32> {
                 eprintln!("No verified checks to sign");
                 return Ok(0);
             }
+
+            // Skip if HEAD already has a matching trailer (e.g. after fast-forward merge)
+            if let Some(existing) = trailer::read_trailer(&project_root)? {
+                let all_match = hashes.len() == existing.len()
+                    && hashes.iter().all(|(name, hash)| {
+                        existing.get(name).map(|s| s.as_str())
+                            == Some(trailer::truncate_hash(hash))
+                    });
+                if all_match {
+                    if !cli.json {
+                        eprintln!("HEAD already has matching trailer, skipping resign");
+                    }
+                    return Ok(0);
+                }
+            }
+
             let trailer_value = trailer::format_trailer_value(&hashes);
             trailer::resign_head(&project_root, &hashes)?;
             if !cli.json {
