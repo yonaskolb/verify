@@ -1771,3 +1771,60 @@ verifications:
     // And trailer should be there too
     assert!(message.contains("Verified:"), "Trailer missing: {}", message);
 }
+
+#[test]
+fn test_resign_works_with_merge_head_present() {
+    // Simulates the post-merge hook scenario: MERGE_HEAD exists because
+    // git hasn't cleaned it up yet when the hook runs.
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run verify to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Find the .git directory (handles both regular repos and worktrees)
+    let git_dir_output = Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let git_dir = temp_dir.path().join(
+        String::from_utf8_lossy(&git_dir_output.stdout).trim()
+    );
+
+    // Create MERGE_HEAD to simulate post-merge hook state
+    let merge_head_path = git_dir.join("MERGE_HEAD");
+    let head_output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let head_hash = String::from_utf8_lossy(&head_output.stdout).trim().to_string();
+    fs::write(&merge_head_path, format!("{}\n", head_hash)).unwrap();
+
+    // Resign should succeed even with MERGE_HEAD present
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "resign should succeed with MERGE_HEAD present: {}", stderr);
+    assert!(stderr.contains("Resigned HEAD with:"), "Should print trailer: {}", stderr);
+
+    // Verify HEAD now has the trailer
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stdout);
+    assert!(message.contains("Verified:"), "HEAD should have Verified trailer: {}", message);
+
+    // Clean up
+    let _ = fs::remove_file(&merge_head_path);
+}

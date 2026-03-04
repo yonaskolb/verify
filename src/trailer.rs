@@ -223,10 +223,18 @@ pub fn write_trailer(commit_msg_file: &Path, hashes: &BTreeMap<String, String>) 
     Ok(())
 }
 
+/// RAII guard that removes a file on drop.
+struct FileGuard(std::path::PathBuf);
+impl Drop for FileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Amend HEAD's commit message with a fresh Verified trailer.
-/// Reads the current commit message, writes it to a temp file,
-/// applies the trailer via write_trailer(), then amends the commit.
-/// Sets VERIFY_RESIGNING=1 on the amend to prevent hook recursion.
+/// Temporarily removes MERGE_HEAD if present so `git commit --amend`
+/// doesn't fail during post-merge hooks (where git hasn't cleaned up
+/// merge state yet). Restores it afterward.
 pub fn resign_head(project_root: &Path, hashes: &BTreeMap<String, String>) -> Result<()> {
     // Read HEAD's commit message
     let output = Command::new("git")
@@ -244,15 +252,26 @@ pub fn resign_head(project_root: &Path, hashes: &BTreeMap<String, String>) -> Re
 
     let message = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // Use a temp file outside the git dir to avoid issues with worktrees
-    // (where .git is a file, not a directory) and to avoid leaving junk
-    // in the git dir if the process is interrupted.
+    // Write message with trailer to temp file (outside .git to handle worktrees)
     let temp_path = std::env::temp_dir().join(format!("verify-resign-msg-{}", std::process::id()));
-    std::fs::write(&temp_path, &message)
-        .context("Failed to write temp commit message file")?;
-
-    // Write the trailer (replaces existing Verified: trailer via --if-exists replace)
+    let _cleanup = FileGuard(temp_path.clone());
+    std::fs::write(&temp_path, &message).context("Failed to write temp commit message file")?;
     write_trailer(&temp_path, hashes)?;
+
+    // Temporarily remove MERGE_HEAD if present — git commit --amend refuses
+    // to run while it exists, but during post-merge hooks the merge is already
+    // complete and git just hasn't cleaned up yet.
+    let git_dir_output = Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to find git dir")?;
+    let git_dir = project_root.join(String::from_utf8_lossy(&git_dir_output.stdout).trim());
+    let merge_head = git_dir.join("MERGE_HEAD");
+    let merge_head_backup = std::fs::read(&merge_head).ok();
+    if merge_head_backup.is_some() {
+        let _ = std::fs::remove_file(&merge_head);
+    }
 
     // Amend HEAD with the updated message
     let amend = Command::new("git")
@@ -264,8 +283,10 @@ pub fn resign_head(project_root: &Path, hashes: &BTreeMap<String, String>) -> Re
         .output()
         .context("Failed to amend HEAD commit")?;
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
+    // Restore MERGE_HEAD if we removed it
+    if let Some(content) = merge_head_backup {
+        let _ = std::fs::write(&merge_head, content);
+    }
 
     if !amend.status.success() {
         anyhow::bail!(
