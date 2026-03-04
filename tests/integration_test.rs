@@ -1771,3 +1771,113 @@ verifications:
     // And trailer should be there too
     assert!(message.contains("Verified:"), "Trailer missing: {}", message);
 }
+
+#[test]
+fn test_resign_works_with_merge_head_present() {
+    // Simulates the post-merge hook scenario: MERGE_HEAD exists because
+    // git hasn't cleaned it up yet when the hook runs.
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run verify to populate cache
+    run_verify(temp_dir.path(), &["run"]);
+
+    // Find the .git directory (handles both regular repos and worktrees)
+    let git_dir_output = Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let git_dir = temp_dir.path().join(
+        String::from_utf8_lossy(&git_dir_output.stdout).trim()
+    );
+
+    // Create MERGE_HEAD to simulate post-merge hook state
+    let merge_head_path = git_dir.join("MERGE_HEAD");
+    let head_output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let head_hash = String::from_utf8_lossy(&head_output.stdout).trim().to_string();
+    fs::write(&merge_head_path, format!("{}\n", head_hash)).unwrap();
+
+    // Resign should succeed even with MERGE_HEAD present
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "resign should succeed with MERGE_HEAD present: {}", stderr);
+    assert!(stderr.contains("Resigned HEAD with:"), "Should print trailer: {}", stderr);
+
+    // Verify HEAD now has the trailer
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&output.stdout);
+    assert!(message.contains("Verified:"), "HEAD should have Verified trailer: {}", message);
+
+    // Clean up
+    let _ = fs::remove_file(&merge_head_path);
+}
+
+#[test]
+fn test_resign_skips_when_trailer_already_matches() {
+    // Simulates the fast-forward merge scenario: HEAD already has a valid
+    // Verified trailer that matches the current file state, so resign
+    // should be a no-op (avoids rewriting shared history).
+    let config = r#"
+verifications:
+  - name: build
+    command: echo "build"
+    cache_paths:
+      - "*.txt"
+"#;
+    let temp_dir = setup_test_project(config);
+    fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+    init_git_repo(temp_dir.path());
+
+    // Run verify and resign to get a commit with a valid trailer
+    run_verify(temp_dir.path(), &["run"]);
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "first resign should succeed: {}", stderr);
+    assert!(stderr.contains("Resigned HEAD with:"), "Should resign: {}", stderr);
+
+    // Record the commit hash after first resign
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let hash_after_first = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Second resign should skip — trailer already matches
+    let (success, _, stderr) = run_verify(temp_dir.path(), &["resign"]);
+    assert!(success, "second resign should succeed: {}", stderr);
+    assert!(
+        stderr.contains("already has matching trailer"),
+        "Should skip resign: {}",
+        stderr,
+    );
+
+    // Commit hash should be unchanged (no amend happened)
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_dir.path())
+        .output()
+        .unwrap();
+    let hash_after_second = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(
+        hash_after_first, hash_after_second,
+        "HEAD should not have been amended",
+    );
+}
