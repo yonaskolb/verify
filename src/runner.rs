@@ -521,8 +521,9 @@ pub fn run_sync(
     config: &Config,
     cache: &mut CacheState,
     json: bool,
+    verbose: bool,
 ) -> Result<bool> {
-    let ui = Ui::new(false);
+    let ui = Ui::new(verbose);
 
     // Search recent history for a trailer
     let trailer_hashes = crate::trailer::read_trailer_from_history(project_root, 50)?;
@@ -536,6 +537,10 @@ pub fn run_sync(
             return Ok(false);
         }
     };
+
+    if verbose {
+        eprintln!("Trailer hashes found: {:?}", trailer_hashes);
+    }
 
     let graph = DependencyGraph::from_config(config)?;
     let waves = graph.execution_waves();
@@ -575,6 +580,17 @@ pub fn run_sync(
             let truncated = crate::trailer::truncate_hash(&combined);
 
             let trailer_value = trailer_hashes.get(&check_name).map(|s| s.as_str());
+
+            if verbose {
+                eprintln!(
+                    "  {} trailer={} computed={} config_hash={} content_hash={}",
+                    check_name,
+                    trailer_value.unwrap_or("(missing)"),
+                    truncated,
+                    &config_hash[..8],
+                    &hash_result.combined_hash[..8],
+                );
+            }
 
             if trailer_value == Some(truncated) {
                 // Trailer matches — seed the cache entry
