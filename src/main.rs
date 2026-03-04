@@ -214,7 +214,7 @@ fn run() -> Result<i32> {
         Commands::Sync {} => {
             let config = config::Config::load(config_path)?;
             let mut cache = cache::CacheState::load(&project_root)?;
-            runner::run_sync(&project_root, &config, &mut cache, cli.json)?;
+            runner::run_sync(&project_root, &config, &mut cache, cli.json, cli.verbose)?;
             Ok(0)
         }
     }

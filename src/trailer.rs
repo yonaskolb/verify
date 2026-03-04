@@ -115,8 +115,8 @@ pub fn compute_all_expected_hashes(
 
 /// Read the Verified trailer from the HEAD commit.
 /// Returns None if no Verified trailer is found.
-/// Parses "name:hash,name:hash,..." format into a map.
 pub fn read_trailer(project_root: &Path) -> Result<Option<BTreeMap<String, String>>> {
+    // Try git's built-in trailer parser first
     let output = Command::new("git")
         .args(["log", "-1", "--format=%(trailers:key=Verified,valueonly)"])
         .current_dir(project_root)
@@ -131,22 +131,42 @@ pub fn read_trailer(project_root: &Path) -> Result<Option<BTreeMap<String, Strin
     }
 
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if value.is_empty() {
-        return Ok(None);
+    if !value.is_empty() {
+        return Ok(Some(parse_trailer_value(&value)));
     }
 
-    Ok(Some(parse_trailer_value(&value)))
+    // Fallback: parse commit body directly for "Verified:" line.
+    // GitHub squash-merge can insert separators or blank lines between trailers,
+    // which breaks git's trailer detection.
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(project_root)
+        .output()
+        .context("Failed to run git log")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_verified_from_body(&body))
 }
 
 /// Search recent git history for the most recent commit with a Verified trailer.
 /// Returns None if no trailer is found within max_depth commits.
+///
+/// Uses direct body parsing rather than git's built-in trailer parser, because
+/// GitHub squash-merge can reformat commit messages in ways that break git's
+/// trailer detection.
 pub fn read_trailer_from_history(
     project_root: &Path,
     max_depth: usize,
 ) -> Result<Option<BTreeMap<String, String>>> {
-    let depth_arg = format!("-{}", max_depth);
     let output = Command::new("git")
-        .args(["log", &depth_arg, "--format=%(trailers:key=Verified,valueonly)"])
+        .args(["log", &format!("-{}", max_depth), "--format=%B%x00"])
         .current_dir(project_root)
         .output()
         .context("Failed to run git log. Is this a git repository?")?;
@@ -159,14 +179,30 @@ pub fn read_trailer_from_history(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            return Ok(Some(parse_trailer_value(trimmed)));
+    for commit_body in stdout.split('\0') {
+        if let Some(map) = parse_verified_from_body(commit_body) {
+            return Ok(Some(map));
         }
     }
 
     Ok(None)
+}
+
+/// Parse a commit message body for a "Verified: name:hash,..." line.
+/// Returns the last match, since squash-merge commits may concatenate
+/// multiple commit messages each with their own Verified trailer.
+fn parse_verified_from_body(body: &str) -> Option<BTreeMap<String, String>> {
+    let mut last_match: Option<BTreeMap<String, String>> = None;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("Verified:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                last_match = Some(parse_trailer_value(value));
+            }
+        }
+    }
+    last_match
 }
 
 /// Parse a trailer value string "name:hash,name:hash,..." into a map.
@@ -375,6 +411,90 @@ mod tests {
     fn test_parse_trailer_value_empty() {
         let parsed = parse_trailer_value("");
         assert_eq!(parsed.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_verified_from_body_with_separator() {
+        // GitHub squash-merge Case 1: separator between trailer blocks
+        let body = "\
+Some commit message
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Verified: build:e833da99,lint:4f573842,specs:3a6033ce,unit-tests:4dac16e9
+
+---------
+
+Co-authored-by: Claude Haiku 4.5 <noreply@anthropic.com>";
+        let result = parse_verified_from_body(body).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result["build"], "e833da99");
+        assert_eq!(result["lint"], "4f573842");
+        assert_eq!(result["specs"], "3a6033ce");
+        assert_eq!(result["unit-tests"], "4dac16e9");
+    }
+
+    #[test]
+    fn test_parse_verified_from_body_with_blank_line() {
+        // GitHub squash-merge Case 2: blank line between trailers
+        let body = "\
+Some commit message
+
+Verified: build:913f862e,lint:d70e7981,snapshots:83f76e78
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>";
+        let result = parse_verified_from_body(body).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result["build"], "913f862e");
+        assert_eq!(result["lint"], "d70e7981");
+        assert_eq!(result["snapshots"], "83f76e78");
+    }
+
+    #[test]
+    fn test_parse_verified_from_body_normal_trailers() {
+        // Normal case: contiguous trailer block (git parser would handle this,
+        // but our fallback should work too)
+        let body = "\
+Some commit message
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Verified: build:65c54b33,lint:c22ab02f";
+        let result = parse_verified_from_body(body).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result["build"], "65c54b33");
+        assert_eq!(result["lint"], "c22ab02f");
+    }
+
+    #[test]
+    fn test_parse_verified_from_body_no_trailer() {
+        let body = "Some commit message\n\nNo trailers here.";
+        assert!(parse_verified_from_body(body).is_none());
+    }
+
+    #[test]
+    fn test_parse_verified_from_body_squash_merge_multiple_trailers() {
+        // GitHub squash-merge concatenates all commit messages from the PR.
+        // Multiple commits may each have their own Verified trailer.
+        // The last one is the most recent and should win.
+        let body = "\
+First commit message
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Verified: build:old11111,lint:old22222,specs:45ed4459
+
+Second commit with updated checks
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Verified: build:913f862e,lint:d70e7981,snapshots:83f76e78,specs:45ed4459,unit-tests:9157effd
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>";
+        let result = parse_verified_from_body(body).unwrap();
+        assert_eq!(result.len(), 5);
+        // Should have the LAST trailer's values, not the first
+        assert_eq!(result["build"], "913f862e");
+        assert_eq!(result["lint"], "d70e7981");
+        assert_eq!(result["snapshots"], "83f76e78");
+        assert_eq!(result["specs"], "45ed4459");
+        assert_eq!(result["unit-tests"], "9157effd");
     }
 
     #[test]
