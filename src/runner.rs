@@ -54,9 +54,24 @@ fn execute_command(
             Err(e) => return (false, None, format!("Failed to execute command: {}", e)),
         };
 
-        let mut combined_output = String::new();
+        // Drain stdout and stderr concurrently. Reading one pipe to EOF before
+        // touching the other deadlocks as soon as the child fills the untouched
+        // pipe's buffer (64 KiB on macOS/Linux): its write blocks, the pipe we
+        // are reading never reaches EOF, and both sides wait forever.
+        let stderr_reader = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let mut captured = String::new();
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("{}", line);
+                    captured.push_str(&line);
+                    captured.push('\n');
+                }
+                captured
+            })
+        });
 
-        // Read stdout
+        let mut combined_output = String::new();
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
@@ -66,14 +81,8 @@ fn execute_command(
             }
         }
 
-        // Read stderr
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                eprintln!("{}", line);
-                combined_output.push_str(&line);
-                combined_output.push('\n');
-            }
+        if let Some(Ok(captured)) = stderr_reader.map(|handle| handle.join()) {
+            combined_output.push_str(&captured);
         }
 
         let status = child.wait();
