@@ -1924,6 +1924,34 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_command_verbose_large_stderr_does_not_deadlock() {
+        // Verbose mode streams stdout to EOF before it touches stderr. A child
+        // that fills the 64 KiB stderr pipe while stdout stays open blocks on
+        // its write, never closes stdout, and the two hang forever (this is how
+        // `verify --verbose` wedged on a Swift 6.4 build with ~84 KB of warnings).
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = temp_dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let result = execute_command(
+                "yes 'stderr filler' | head -c 300000 >&2; echo 'stdout after stderr'",
+                &dir,
+                None,
+                true,
+                &[],
+            );
+            let _ = tx.send(result);
+        });
+        let (success, _, output) = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("verbose execute_command deadlocked on a full stderr pipe");
+
+        assert!(success);
+        assert!(output.contains("stdout after stderr"));
+        assert!(output.contains("stderr filler"));
+    }
+
+    #[test]
     fn test_execute_command_with_env_var() {
         let temp_dir = tempfile::tempdir().unwrap();
         let env_vars = [("MY_TEST_VAR", "test_value")];
