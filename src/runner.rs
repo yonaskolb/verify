@@ -54,26 +54,26 @@ fn execute_command(
             Err(e) => return (false, None, format!("Failed to execute command: {}", e)),
         };
 
-        let mut combined_output = String::new();
+        // Drain stdout and stderr concurrently. Reading one pipe to EOF before
+        // touching the other deadlocks as soon as the child fills the untouched
+        // pipe's buffer (64 KiB on macOS/Linux): its write blocks, the pipe we
+        // are reading never reaches EOF, and both sides wait forever.
+        let stderr_reader = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || stream_lines(stderr, |line| eprintln!("{}", line)))
+        });
 
-        // Read stdout
+        let mut combined_output = String::new();
         if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                println!("{}", line);
-                combined_output.push_str(&line);
-                combined_output.push('\n');
-            }
+            combined_output.push_str(&stream_lines(stdout, |line| println!("{}", line)));
         }
 
-        // Read stderr
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                eprintln!("{}", line);
-                combined_output.push_str(&line);
-                combined_output.push('\n');
-            }
+        if let Some(handle) = stderr_reader {
+            // A panic in the reader is a bug in verify, not in the check; surface
+            // it rather than quietly reporting the check without its stderr.
+            let captured = handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            combined_output.push_str(&captured);
         }
 
         let status = child.wait();
@@ -104,6 +104,31 @@ fn execute_command(
             Err(e) => (false, None, format!("Failed to execute command: {}", e)),
         }
     }
+}
+
+/// Streams a pipe line by line, echoing each line as it arrives and returning
+/// everything read. Reads raw bytes and converts lossily rather than using
+/// `BufRead::lines`, which errors on the first byte that isn't UTF-8: stopping
+/// there drops the pipe, and the child's next write to it dies with SIGPIPE.
+fn stream_lines<R: std::io::Read>(reader: R, echo: impl Fn(&str)) -> String {
+    let mut reader = BufReader::new(reader);
+    let mut captured = String::new();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                let line = line.strip_suffix('\n').unwrap_or(&line);
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                echo(line);
+                captured.push_str(line);
+                captured.push('\n');
+            }
+        }
+    }
+    captured
 }
 
 /// Compute verification status for a check, considering dependencies
@@ -1921,6 +1946,64 @@ mod tests {
         assert!(success);
         assert!(output.contains("stdout"));
         assert!(output.contains("stderr"));
+    }
+
+    #[test]
+    fn test_execute_command_verbose_large_stderr_does_not_deadlock() {
+        // Verbose mode streams stdout to EOF before it touches stderr. A child
+        // that fills the 64 KiB stderr pipe while stdout stays open blocks on
+        // its write, never closes stdout, and the two hang forever (this is how
+        // `verify --verbose` wedged on a Swift 6.4 build with ~84 KB of warnings).
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = temp_dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let result = execute_command(
+                "yes 'stderr filler' | head -c 300000 >&2; echo 'stdout after stderr'",
+                &dir,
+                None,
+                true,
+                &[],
+            );
+            let _ = tx.send(result);
+        });
+        let (success, _, output) = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("verbose execute_command deadlocked on a full stderr pipe");
+
+        assert!(success);
+        assert!(output.contains("stdout after stderr"));
+        assert!(output.contains("stderr filler"));
+    }
+
+    #[test]
+    fn test_execute_command_verbose_survives_non_utf8_output() {
+        // A byte that isn't UTF-8 must not stop the reader: dropping the pipe
+        // early SIGPIPEs the child on its next write, turning a passing check
+        // into a failure that only happens under --verbose.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, output) = execute_command(
+            // Octal, not `\x`: `\x` is a bash extension, and dash (Ubuntu's /bin/sh)
+            // prints it literally, which would make this valid UTF-8 on CI.
+            "printf 'bad \\377 byte\\n' >&2; sleep 0.2; echo 'stderr after' >&2; printf 'bad \\377 out\\n'; sleep 0.2; echo 'stdout after'",
+            temp_dir.path(),
+            None,
+            true,
+            &[],
+        );
+
+        assert_eq!(exit_code, Some(0), "child was killed: {}", output);
+        assert!(success);
+        assert!(
+            output.contains("stderr after"),
+            "stderr truncated: {}",
+            output
+        );
+        assert!(
+            output.contains("stdout after"),
+            "stdout truncated: {}",
+            output
+        );
     }
 
     #[test]
