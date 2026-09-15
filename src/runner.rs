@@ -59,29 +59,20 @@ fn execute_command(
         // pipe's buffer (64 KiB on macOS/Linux): its write blocks, the pipe we
         // are reading never reaches EOF, and both sides wait forever.
         let stderr_reader = child.stderr.take().map(|stderr| {
-            std::thread::spawn(move || {
-                let mut captured = String::new();
-                let reader = BufReader::new(stderr);
-                for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("{}", line);
-                    captured.push_str(&line);
-                    captured.push('\n');
-                }
-                captured
-            })
+            std::thread::spawn(move || stream_lines(stderr, |line| eprintln!("{}", line)))
         });
 
         let mut combined_output = String::new();
         if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                println!("{}", line);
-                combined_output.push_str(&line);
-                combined_output.push('\n');
-            }
+            combined_output.push_str(&stream_lines(stdout, |line| println!("{}", line)));
         }
 
-        if let Some(Ok(captured)) = stderr_reader.map(|handle| handle.join()) {
+        if let Some(handle) = stderr_reader {
+            // A panic in the reader is a bug in verify, not in the check; surface
+            // it rather than quietly reporting the check without its stderr.
+            let captured = handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
             combined_output.push_str(&captured);
         }
 
@@ -113,6 +104,31 @@ fn execute_command(
             Err(e) => (false, None, format!("Failed to execute command: {}", e)),
         }
     }
+}
+
+/// Streams a pipe line by line, echoing each line as it arrives and returning
+/// everything read. Reads raw bytes and converts lossily rather than using
+/// `BufRead::lines`, which errors on the first byte that isn't UTF-8: stopping
+/// there drops the pipe, and the child's next write to it dies with SIGPIPE.
+fn stream_lines<R: std::io::Read>(reader: R, echo: impl Fn(&str)) -> String {
+    let mut reader = BufReader::new(reader);
+    let mut captured = String::new();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                let line = line.strip_suffix('\n').unwrap_or(&line);
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                echo(line);
+                captured.push_str(line);
+                captured.push('\n');
+            }
+        }
+    }
+    captured
 }
 
 /// Compute verification status for a check, considering dependencies
@@ -1958,6 +1974,36 @@ mod tests {
         assert!(success);
         assert!(output.contains("stdout after stderr"));
         assert!(output.contains("stderr filler"));
+    }
+
+    #[test]
+    fn test_execute_command_verbose_survives_non_utf8_output() {
+        // A byte that isn't UTF-8 must not stop the reader: dropping the pipe
+        // early SIGPIPEs the child on its next write, turning a passing check
+        // into a failure that only happens under --verbose.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (success, exit_code, output) = execute_command(
+            // Octal, not `\x`: `\x` is a bash extension, and dash (Ubuntu's /bin/sh)
+            // prints it literally, which would make this valid UTF-8 on CI.
+            "printf 'bad \\377 byte\\n' >&2; sleep 0.2; echo 'stderr after' >&2; printf 'bad \\377 out\\n'; sleep 0.2; echo 'stdout after'",
+            temp_dir.path(),
+            None,
+            true,
+            &[],
+        );
+
+        assert_eq!(exit_code, Some(0), "child was killed: {}", output);
+        assert!(success);
+        assert!(
+            output.contains("stderr after"),
+            "stderr truncated: {}",
+            output
+        );
+        assert!(
+            output.contains("stdout after"),
+            "stdout truncated: {}",
+            output
+        );
     }
 
     #[test]
